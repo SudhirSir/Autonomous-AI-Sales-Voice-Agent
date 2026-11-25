@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fortivex — Autonomous AI Sales Voice Agent</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-logo">FX</div>
+      <div>
+        <h1>Fortivex AI Sales Voice Agent</h1>
+        <small>Real-Time STT/TTS · Multilingual · RAG · BANT CRM · Auto-Booking</small>
+      </div>
+    </div>
+
+    <nav class="nav-tabs" role="tablist">
+      <button class="nav-tab active" data-view="view-studio">Voice Studio</button>
+      <button class="nav-tab" data-view="view-crm">CRM &amp; Calendar</button>
+      <button class="nav-tab" data-view="view-kb">RAG Knowledge Base</button>
+      <button class="nav-tab" data-view="view-insights">Business Insights</button>
+    </nav>
+
+    <div class="top-actions">
+      <span class="pill" id="wsBadge"><span class="dot offline" id="wsDot"></span><span id="wsLabel">Connecting</span></span>
+      <span class="pill" id="engineBadge">Engine: local-hybrid</span>
+      <button class="btn" id="newCallBtn">+ New Call</button>
+      <button class="btn" id="openSettingsBtn">Settings</button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- VIEW 1: LIVE VOICE STUDIO -->
+    <section id="view-studio" class="view active">
+      <div class="studio-grid">
+        <!-- Left: Voice Stage & Live Transcript -->
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Live Voice Conversation</h2>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <span class="pill" id="sessionIdPill">Session: —</span>
+              <button class="btn btn-emerald" id="endSummarizeBtn">End &amp; Summarize Call</button>
+            </div>
+          </div>
+
+          <div class="voice-stage">
+            <div class="voice-controls-top">
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <label style="font-size:12px; color:var(--muted);">Language:
+                  <select id="langSelect" class="select">
+                    <option value="">Auto-Detect</option>
+                    <option value="en">English (en-US)</option>
+                    <option value="es">Spanish (es-ES)</option>
+                    <option value="fr">French (fr-FR)</option>
+                    <option value="de">German (de-DE)</option>
+                    <option value="hi">Hindi (hi-IN)</option>
+                  </select>
+                </label>
+                <label style="font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px;">
+                  <input type="checkbox" id="autoSpeakToggle" checked /> Auto-Speak TTS
+                </label>
+                <label style="font-size:12px; color:var(--muted); display:flex; align-items:center; gap:5px;">
+                  <input type="checkbox" id="continuousVoiceToggle" /> Hands-Free Loop
+                </label>
+              </div>
+              <button class="btn btn-danger" id="stopSpeakBtn" style="padding:5px 10px; font-size:12px;">Stop AI Voice (Barge-In)</button>
+            </div>
+
+            <div class="waveform-wrap">
+              <canvas id="waveformCanvas" width="640" height="84"></canvas>
+              <div class="voice-status-badge" id="voiceStatus">Idle — Click Speak or type below</div>
+            </div>
+
+            <div class="mic-row">
+              <button class="mic-btn" id="micToggleBtn">
+                <span id="micIcon">🎙️</span>
+                <span id="micLabel">Start Voice Call (STT)</span>
+              </button>
+              <span id="interimText" style="font-size:12.5px; color:var(--sky); font-style:italic;"></span>
+            </div>
+          </div>
+
+          <div class="scenario-strip" title="One-click test utterances to demonstrate multilingual RAG, BANT, and booking">
+            <button class="chip" data-utterance="Hi, I'm Alex Rivera, VP of Sales at ApexCloud. We have 60 sales reps wasting hours on manual CRM entry and want to roll out an AI voice solution this month with a $40k budget.">EN: Enterprise Discovery</button>
+            <button class="chip" data-utterance="Hola, soy Sofía Gómez de FinTech Latam. ¿Cuáles son sus precios y cumplen con GDPR y SOC2?">ES: Pricing &amp; SOC2</button>
+            <button class="chip" data-utterance="Bonjour, je m'appelle Claire chez DataFlow. Pouvez-vous vous intégrer à Salesforce et HubSpot ?">FR: Integrations</button>
+            <button class="chip" data-utterance="That sounds expensive—we already use Gong and are worried about implementation time.">Objection: Gong &amp; Cost</button>
+            <button class="chip" data-utterance="Great, let's book a live demo tomorrow at 2pm. My email is alex@apexcloud.io.">Book Demo Tomorrow 2pm</button>
+            <button class="chip" data-utterance="नमस्ते, मेरा नाम रोहन है। हम 30 लोगों की टीम के लिए कल सुबह 10 बजे डेमो बुक करना चाहते हैं।">HI: Book Demo</button>
+          </div>
+
+          <div class="transcript" id="transcriptBox"></div>
+
+          <form class="chat-input-row" id="textTurnForm">
+            <input id="textInput" class="input" type="text" placeholder="Speak via mic above or type a buyer message in EN / ES / FR / DE / HI..." autocomplete="off" />
+            <button type="submit" class="btn btn-primary">Send Turn</button>
+          </form>
+        </div>
+
+        <!-- Right: Live BANT, Memory, Sentiment & RAG Inspector -->
+        <div class="intel-stack">
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">Lead Qualification &amp; BANT</h2>
+              <span class="tag cold" id="tierBadge">Cold</span>
+            </div>
+            <div class="score-banner">
+              <div class="stat-box"><small>Lead Score</small><strong id="leadScoreVal">0 / 100</strong></div>
+              <div class="stat-box"><small>Pipeline Stage</small><strong id="leadStageVal" style="font-size:14px;">Discovery</strong></div>
+              <div class="stat-box"><small>Est. ACV</small><strong id="leadAcvVal">$0</strong></div>
+            </div>
+            <div class="bant-row">
+              <div class="bant-label"><span>Budget</span><span id="bantBudgetText">Unknown</span></div>
+              <div class="progress-track"><div class="progress-fill" id="bantBudgetBar" style="width:0%"></div></div>
+            </div>
+            <div class="bant-row">
+              <div class="bant-label"><span>Authority</span><span id="bantAuthText">Unknown</span></div>
+              <div class="progress-track"><div class="progress-fill" id="bantAuthBar" style="width:0%"></div></div>
+            </div>
+            <div class="bant-row">
+              <div class="bant-label"><span>Need</span><span id="bantNeedText">Unknown</span></div>
+              <div class="progress-track"><div class="progress-fill" id="bantNeedBar" style="width:0%"></div></div>
+            </div>
+            <div class="bant-row" style="margin-bottom:0;">
+              <div class="bant-label"><span>Timeline</span><span id="bantTimeText">Unknown</span></div>
+              <div class="progress-track"><div class="progress-fill" id="bantTimeBar" style="width:0%"></div></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">Contextual Memory &amp; Sentiment</h2>
+              <span class="tag" id="sentimentLabelBadge">Neutral (0.0)</span>
+            </div>
+            <div class="kv-grid" style="margin-bottom:10px;">
+              <div class="kv-item"><span>Contact</span><strong id="memName">—</strong></div>
+              <div class="kv-item"><span>Company / Role</span><strong id="memCompanyRole">—</strong></div>
+              <div class="kv-item"><span>Email / Team Size</span><strong id="memEmailSize">—</strong></div>
+              <div class="kv-item"><span>Detected Language</span><strong id="memLang">en</strong></div>
+            </div>
+            <div id="memSignalsRow" style="margin-bottom:8px;"></div>
+            <svg id="sentimentSparkline" viewBox="0 0 320 44" style="width:100%; height:44px; background:var(--bg); border:1px solid #1e293b; border-radius:8px;">
+              <line x1="0" y1="22" x2="320" y2="22" stroke="#243047" stroke-dasharray="3,3" />
+              <polyline id="sentimentPath" fill="none" stroke="#10b981" stroke-width="2.2" points="10,22 310,22" />
+            </svg>
+          </div>
+
+          <div class="card" id="bookingCard">
+            <div class="card-header">
+              <h2 class="card-title">Automated Calendar &amp; RAG</h2>
+              <span class="pill" style="font-size:11px;" id="crmSyncPill">CRM Sync: Ready</span>
+            </div>
+            <div id="bookingStatusBox" style="font-size:12.5px; color:var(--muted); margin-bottom:10px;">
+              No appointment booked yet. Ask to schedule a demo or click a proposed slot when offered.
+            </div>
+            <div id="ragChunksBox">
+              <div style="font-size:12px; color:var(--muted);">Retrieved knowledge chunks will appear here on each turn.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 2: CRM & CALENDAR -->
+    <section id="view-crm" class="view">
+      <div class="card" style="margin-bottom:18px;">
+        <div class="card-header">
+          <h2 class="card-title">CRM Pipeline (SQLite + Synced Leads)</h2>
+          <div style="display:flex; gap:8px;">
+            <button class="btn" id="refreshCrmBtn">Refresh</button>
+            <a class="btn btn-primary" href="/api/leads/export" download>Export CSV</a>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Lead</th>
+                <th>Company &amp; Role</th>
+                <th>Lang</th>
+                <th>Score</th>
+                <th>Tier / Stage</th>
+                <th>Est. ACV</th>
+                <th>Pain Points &amp; Objections</th>
+              </tr>
+            </thead>
+            <tbody id="crmLeadsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Scheduled Appointments</h2>
+          </div>
+          <div id="appointmentsList"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Outbound CRM &amp; Calendar Webhooks</h2>
+          </div>
+          <div id="webhooksList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 3: RAG KNOWLEDGE BASE -->
+    <section id="view-kb" class="view">
+      <div class="two-col">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Test Hybrid RAG Retrieval</h2>
+          </div>
+          <form id="kbSearchForm" style="display:flex; gap:8px; margin-bottom:14px;">
+            <input id="kbSearchInput" class="input" style="flex:1;" placeholder="Query in EN/ES/FR/DE/HI (e.g., 'precios y SOC2', 'Gong vs Fortivex')..." />
+            <button type="submit" class="btn btn-primary">Search</button>
+          </form>
+          <div id="kbSearchResults"></div>
+
+          <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;" />
+          <h3 class="card-title" style="margin-bottom:10px;">Add Custom Knowledge Document</h3>
+          <form id="kbAddForm" style="display:flex; flex-direction:column; gap:8px;">
+            <input id="kbDocTitle" class="input" placeholder="Document Title (e.g., Healthcare HIPAA Addendum)" required />
+            <input id="kbDocCategory" class="input" placeholder="Category (e.g., Security & Compliance)" value="Custom" />
+            <textarea id="kbDocContent" class="textarea" rows="4" placeholder="Paste product specs, pricing rules, or FAQ..." required></textarea>
+            <button type="submit" class="btn btn-emerald">Index into RAG Vector Store</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">Indexed Knowledge Chunks</h2>
+            <span class="pill" id="kbChunkCount">0 chunks</span>
+          </div>
+          <div id="kbChunksList" style="max-height:560px; overflow-y:auto;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 4: BUSINESS INSIGHTS & SUMMARIES -->
+    <section id="view-insights" class="view">
+      <div class="kpi-grid" id="insightsKpiGrid"></div>
+
+      <div class="two-col" style="margin-bottom:18px;">
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Top Buyer Pain Points &amp; Objections</h2></div>
+          <div id="insightsTrendsBox"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><h2 class="card-title">Pipeline Funnel &amp; Languages</h2></div>
+          <div id="insightsFunnelBox"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">AI Call Summaries &amp; Executive Action Items</h2>
+          <button class="btn btn-primary" id="refreshInsightsBtn">Refresh Analytics</button>
+        </div>
+        <div id="summariesList"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Settings Modal -->
+  <div class="modal-backdrop" id="settingsModal">
+    <div class="modal">
+      <div class="card-header">
+        <h2 class="card-title">Voice &amp; AI Engine Settings</h2>
+        <button class="btn" id="closeSettingsBtn">Close</button>
+      </div>
+      <p style="font-size:12.5px; color:var(--muted); margin-top:0;">
+        Works 100% out-of-the-box in <code>local-hybrid</code> mode. Optionally enter a Google Gemini API key to upgrade conversational synthesis and audio transcription.
+      </p>
+      <form id="settingsForm" style="display:flex; flex-direction:column; gap:10px;">
+        <label style="font-size:12px;">Gemini API Key (optional)
+          <input id="geminiKeyInput" class="input" style="width:100%; margin-top:4px;" type="password" placeholder="AIza..." />
+        </label>
+        <label style="font-size:12px;">TTS Speech Rate (<span id="ttsRateVal">1.05</span>x)
+          <input id="ttsRateInput" type="range" min="0.8" max="1.4" step="0.05" value="1.05" style="width:100%;" />
+        </label>
+        <button type="submit" class="btn btn-primary">Save Configuration</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
