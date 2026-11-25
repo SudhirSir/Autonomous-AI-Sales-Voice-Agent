@@ -1,4 +1,4 @@
-/* Fortivex Autonomous AI Sales Voice Agent — Frontend Controller */
+/* Fortivex Voice — Full-Stack SaaS Frontend Controller */
 (() => {
   const state = {
     sessionId: `call-${Math.random().toString(36).slice(2, 10)}`,
@@ -9,13 +9,24 @@
     ttsRate: 1.05,
     sentimentHistory: [0],
     recognition: null,
+    mediaRecorder: null,
+    recordedChunks: [],
+    activeAudio: null,
     audioCtx: null,
     analyser: null,
     micStream: null,
     animFrame: null,
+    streamingBubble: null,
   };
 
-  const LOCALES = { en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', hi: 'hi-IN' };
+  const LOCALES = {
+    en: 'en-US',
+    hi: 'hi-IN',
+    hinglish: 'en-IN',
+    es: 'es-ES',
+    fr: 'fr-FR',
+    de: 'de-DE',
+  };
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) =>
@@ -25,23 +36,40 @@
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;');
 
-  // ---------------- Navigation ----------------
+  function showToast(message, kind = 'info') {
+    const el = document.createElement('div');
+    el.className = `toast ${kind}`;
+    el.textContent = message;
+    $('toastContainer').appendChild(el);
+    setTimeout(() => el.remove(), 4200);
+  }
+
+  // ---------------- Primary Navigation ----------------
+  function switchMainView(viewId) {
+    document.querySelectorAll('.nav-tab').forEach((t) => t.classList.toggle('active', t.dataset.view === viewId));
+    document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === viewId));
+    if (viewId === 'view-crm') loadCRM();
+    if (viewId === 'view-kb') loadKnowledge();
+    if (viewId === 'view-history') loadCallHistory();
+    if (viewId === 'view-insights') loadInsights();
+  }
+
   document.querySelectorAll('.nav-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.nav-tab').forEach((t) => t.classList.remove('active'));
-      document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
-      tab.classList.add('active');
-      const target = tab.dataset.view;
-      $(target).classList.add('active');
-      if (target === 'view-crm') loadCRM();
-      if (target === 'view-kb') loadKnowledge();
-      if (target === 'view-insights') loadInsights();
-    });
+    tab.addEventListener('click', () => switchMainView(tab.dataset.view));
+  });
+
+  function switchSubPane(subId) {
+    document.querySelectorAll('.sub-tab').forEach((t) => t.classList.toggle('active', t.dataset.sub === subId));
+    document.querySelectorAll('.sub-pane').forEach((p) => p.classList.toggle('active', p.id === subId));
+  }
+
+  document.querySelectorAll('.sub-tab').forEach((tab) => {
+    tab.addEventListener('click', () => switchSubPane(tab.dataset.sub));
   });
 
   // ---------------- WebSocket Connection ----------------
   function connectWebSocket() {
-    $('sessionIdPill').textContent = `Session: ${state.sessionId}`;
+    $('sessionIdPill').textContent = state.sessionId;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${proto}//${location.host}/ws/call/${encodeURIComponent(state.sessionId)}`;
     const ws = new WebSocket(url);
@@ -50,31 +78,58 @@
     ws.onopen = () => {
       state.wsReady = true;
       $('wsDot').className = 'dot';
-      $('wsLabel').textContent = 'Live WS';
+      $('wsLabel').textContent = 'Connected';
     };
 
     ws.onclose = () => {
       state.wsReady = false;
       $('wsDot').className = 'dot warn';
-      $('wsLabel').textContent = 'HTTP Fallback';
+      $('wsLabel').textContent = 'REST Mode';
     };
 
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type === 'session_ready') {
-        $('engineBadge').textContent = `Engine: ${msg.ai_engine}`;
+        $('engineBadge').textContent = msg.ai_engine;
         if (msg.memory) renderMemory(msg.memory);
         if (msg.qualification) renderQualification(msg.qualification);
+      } else if (msg.type === 'transcript_stt') {
+        if (msg.transcript) {
+          appendMessage('user', msg.transcript, { language: 'voice' });
+        } else if (msg.error) {
+          showToast(msg.error, 'error');
+        }
       } else if (msg.type === 'agent_thinking') {
-        $('voiceStatus').textContent = 'AI Agent reasoning (RAG + BANT + CRM)...';
+        $('voiceStatus').textContent = 'Thinking...';
+        state.streamingBubble = null;
+      } else if (msg.type === 'turn_delta') {
+        updateStreamingBubble(msg.delta);
       } else if (msg.type === 'turn_result') {
+        if (state.streamingBubble) {
+          state.streamingBubble.remove();
+          state.streamingBubble = null;
+        }
         handleTurnResponse(msg.data);
       } else if (msg.type === 'call_summary') {
-        showSummaryToastAndSwitch(msg.summary);
+        openSummaryModal(msg.summary);
       } else if (msg.type === 'tts_stop') {
         stopSpeaking();
       }
     };
+  }
+
+  function updateStreamingBubble(delta) {
+    if (!state.streamingBubble) {
+      const box = $('transcriptBox');
+      const row = document.createElement('div');
+      row.className = 'msg-row assistant';
+      row.innerHTML = `<div class="msg-bubble"></div><div class="msg-meta">Nova (AI) · streaming...</div>`;
+      box.appendChild(row);
+      state.streamingBubble = row;
+    }
+    const bubble = state.streamingBubble.querySelector('.msg-bubble');
+    bubble.textContent = (bubble.textContent ? bubble.textContent + ' ' : '') + delta;
+    $('transcriptBox').scrollTop = $('transcriptBox').scrollHeight;
   }
 
   // ---------------- Turn Execution ----------------
@@ -82,11 +137,11 @@
     const clean = (text || '').trim();
     if (!clean) return;
 
-    // Barge-in: stop AI speaking immediately when user submits new turn
     stopSpeaking();
-    appendMessage('user', clean, { language: $('langSelect').value || 'auto' });
+    const chosenLang = $('langSelect').value;
+    appendMessage('user', clean, { language: chosenLang || 'auto' });
 
-    const langOverride = $('langSelect').value || null;
+    const langOverride = chosenLang || null;
     if (state.ws && state.wsReady && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(
         JSON.stringify({
@@ -99,8 +154,7 @@
       return;
     }
 
-    // Graceful HTTP fallback
-    $('voiceStatus').textContent = 'Processing turn via REST API...';
+    $('voiceStatus').textContent = 'Processing...';
     const res = await fetch('/api/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -112,15 +166,20 @@
       }),
     });
     if (res.ok) {
-      const data = await res.json();
-      handleTurnResponse(data);
+      handleTurnResponse(await res.json());
+    } else {
+      showToast('Failed to process turn', 'error');
+      $('voiceStatus').textContent = 'Error';
     }
   }
 
   function handleTurnResponse(data) {
-    $('engineBadge').textContent = `Engine: ${data.ai_engine}`;
-    $('voiceStatus').textContent = `Responded in ${data.latency_ms}ms (${data.language.toUpperCase()})`;
-    $('crmSyncPill').textContent = data.crm_synced ? 'CRM Sync: Live ✓' : 'CRM Sync: Pending';
+    $('engineBadge').textContent = data.ai_engine;
+    $('voiceStatus').textContent = `${data.latency_ms}ms · ${data.language.toUpperCase()}`;
+
+    const syncPill = $('crmSyncPill');
+    syncPill.textContent = data.crm_synced ? `CRM: ${data.crm_mode}` : 'CRM: Standby';
+    syncPill.className = data.crm_synced ? 'badge hot' : 'badge';
 
     appendMessage('assistant', data.reply_text, {
       language: data.language,
@@ -128,44 +187,54 @@
       latency: data.latency_ms,
     });
 
-    // Update sentiment history & sparkline
     if (data.sentiment) {
       state.sentimentHistory.push(data.sentiment.polarity);
       renderSentiment(data.sentiment);
     }
-    renderMemory(data.memory);
+    renderMemory(data.memory, data.qualification.stage);
     renderQualification(data.qualification);
     renderBookingAndRag(data);
+    renderToolsAndLatency(data);
+
+    if (data.booking_error) {
+      showToast(data.booking_error, 'error');
+      switchSubPane('sub-rag');
+    } else if (data.booked_appointment || (data.proposed_slots && data.proposed_slots.length)) {
+      switchSubPane('sub-rag');
+    }
 
     if ($('autoSpeakToggle').checked) {
-      speakText(data.reply_text, data.tts_locale);
+      speakReply(data.reply_text, data.language, data.tts_locale, data.tts_provider);
     }
   }
 
   function appendMessage(role, text, meta = {}) {
     const box = $('transcriptBox');
-    const div = document.createElement('div');
-    div.className = `msg ${role}`;
+    const row = document.createElement('div');
+    row.className = `msg-row ${role}`;
 
-    let metaBits = [`<span>${role === 'user' ? 'Buyer' : 'Nova AI'}</span>`];
-    if (meta.language) metaBits.push(`<span>${esc(meta.language.toUpperCase())}</span>`);
-    if (meta.sentiment) metaBits.push(`<span>Sentiment: ${esc(meta.sentiment.label)} (${meta.sentiment.polarity})</span>`);
-    if (meta.latency !== undefined) metaBits.push(`<span>${meta.latency}ms</span>`);
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const parts = [role === 'user' ? 'Prospect' : 'Nova (AI)', timeStr];
+    if (meta.language && meta.language !== 'auto') parts.push(meta.language.toUpperCase());
+    if (meta.sentiment) parts.push(`${meta.sentiment.label} | Intent ${meta.sentiment.intent_score}%`);
+    if (meta.latency !== undefined) parts.push(`${meta.latency}ms`);
 
-    div.innerHTML = `<div>${esc(text)}</div><div class="msg-meta">${metaBits.join(' · ')}</div>`;
-    box.appendChild(div);
+    row.innerHTML = `
+      <div class="msg-bubble">${esc(text)}</div>
+      <div class="msg-meta">${parts.map(esc).join(' · ')}</div>`;
+    box.appendChild(row);
     box.scrollTop = box.scrollHeight;
   }
 
-  // ---------------- Intelligence Panels ----------------
+  // ---------------- Deal Intelligence Rendering ----------------
   function renderQualification(q) {
     $('leadScoreVal').textContent = `${q.score} / 100`;
-    $('leadStageVal').textContent = q.stage;
     $('leadAcvVal').textContent = `$${Number(q.estimated_acv_usd || 0).toLocaleString()}`;
 
     const badge = $('tierBadge');
-    badge.textContent = q.tier;
-    badge.className = `tag ${q.tier.toLowerCase()}`;
+    badge.textContent = `${q.tier} · ${q.stage}`;
+    const cls = q.tier === 'Disqualified' ? 'neg' : q.tier.toLowerCase();
+    badge.className = `badge ${cls}`;
 
     const b = q.bant || {};
     $('bantBudgetText').textContent = b.budget || 'Not disclosed';
@@ -178,33 +247,28 @@
     $('bantTimeBar').style.width = `${(b.timeline_score / 25) * 100}%`;
   }
 
-  function renderMemory(m) {
-    $('memName').textContent = m.name || 'Unknown';
+  function renderMemory(m, stage = 'Discovery') {
+    $('memName').textContent = [m.name, m.phone].filter(Boolean).join(' · ') || '—';
     $('memCompanyRole').textContent = [m.company, m.role].filter(Boolean).join(' · ') || '—';
     $('memEmailSize').textContent = [m.email, m.team_size ? `${m.team_size} seats` : null].filter(Boolean).join(' · ') || '—';
-    $('memLang').textContent = (m.preferred_language || 'en').toUpperCase() + (m.returning_lead ? ' (Returning Lead ✓)' : '');
+    $('memLang').textContent = `${(m.preferred_language || 'en').toUpperCase()} · ${stage}${m.returning_lead ? ' (Returning)' : ''}`;
 
     const tags = [];
-    (m.pain_points || []).forEach((p) => tags.push(`<span class="tag">${esc(p)}</span>`));
-    (m.objections || []).forEach((o) => tags.push(`<span class="tag neg">${esc(o)}</span>`));
-    (m.competitors_mentioned || []).forEach((c) => tags.push(`<span class="tag warm">vs ${esc(c)}</span>`));
+    (m.pain_points || []).forEach((p) => tags.push(`<span class="badge blue">${esc(p)}</span>`));
+    (m.objections || []).forEach((o) => tags.push(`<span class="badge neg">${esc(o)}</span>`));
+    (m.competitors_mentioned || []).forEach((c) => tags.push(`<span class="badge warm">vs ${esc(c)}</span>`));
     $('memSignalsRow').innerHTML = tags.join('');
   }
 
   function renderSentiment(s) {
+    $('intentScoreVal').textContent = `${s.intent_score} / 100`;
     const badge = $('sentimentLabelBadge');
-    badge.textContent = `${s.label} (${s.polarity > 0 ? '+' : ''}${s.polarity})`;
-    badge.className = `tag ${s.polarity >= 0.2 ? 'hot' : s.polarity < 0 ? 'neg' : 'cold'}`;
+    badge.textContent = `${s.label} (${s.polarity > 0 ? '+' : ''}${s.polarity}) · Readiness: ${s.purchase_readiness}`;
+    badge.className = `badge ${s.polarity >= 0.2 ? 'hot' : s.polarity < 0 ? 'neg' : ''}`;
 
     const pts = state.sentimentHistory.slice(-14);
     const stepX = pts.length > 1 ? 300 / (pts.length - 1) : 300;
-    const coords = pts
-      .map((v, idx) => {
-        const x = 10 + idx * stepX;
-        const y = 22 - v * 16;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      })
-      .join(' ');
+    const coords = pts.map((v, idx) => `${(10 + idx * stepX).toFixed(1)},${(21 - v * 15).toFixed(1)}`).join(' ');
     $('sentimentPath').setAttribute('points', coords);
   }
 
@@ -212,49 +276,103 @@
     const bookBox = $('bookingStatusBox');
     if (data.booked_appointment) {
       const a = data.booked_appointment;
+      bookBox.className = 'list-item';
+      bookBox.style = 'background:var(--green-soft); border-color:var(--green-border); color:#065f46; margin-bottom:0;';
       bookBox.innerHTML = `
-        <div style="padding:10px; border-radius:9px; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.35); color:#a7f3d0;">
-          <strong>Demo Confirmed:</strong> ${esc(a.slot_iso)}<br/>
-          <span>Meeting Link: <code>${esc(a.meeting_link)}</code></span>
-        </div>`;
+        <strong>${esc(a.status)} (${esc(a.id)})</strong> — ${esc(new Date(a.slot_iso).toUTCString().replace(':00 GMT', ' UTC'))}<br/>
+        <span style="font-size:12px;">Link: <code class="mono">${esc(a.meeting_link)}</code></span>`;
     } else if (data.proposed_slots && data.proposed_slots.length) {
+      bookBox.className = 'list-item';
+      bookBox.style = 'margin-bottom:0;';
       bookBox.innerHTML =
-        `<div><strong>Proposed Calendar Slots</strong> (click to confirm):</div>` +
+        `<div style="font-weight:600; font-size:12.5px;">Available business-hour slots (click to book):</div>` +
         data.proposed_slots
-          .map(
-            (s, i) =>
-              `<button class="slot-btn" data-slot="${i + 1}">${esc(new Date(s).toUTCString().replace(':00 GMT', ' UTC'))}</button>`
-          )
+          .map((s, i) => `<button class="slot-btn" data-slot="${i + 1}">${esc(new Date(s).toUTCString().replace(':00 GMT', ' UTC'))}</button>`)
           .join('');
       bookBox.querySelectorAll('.slot-btn').forEach((btn) => {
         btn.addEventListener('click', () => sendTurn(`Option ${btn.dataset.slot} works great, please book it.`));
       });
     }
 
+    const gBadge = $('kbGroundedBadge');
+    gBadge.textContent = data.kb_grounded ? 'Grounded' : 'Out-of-Scope Guardrail';
+    gBadge.className = `badge ${data.kb_grounded ? 'hot' : 'warm'}`;
+
     const ragBox = $('ragChunksBox');
     const chunks = data.retrieved_chunks || [];
     if (!chunks.length) {
-      ragBox.innerHTML = `<div style="font-size:12px; color:var(--muted);">No specific KB chunks needed for this turn.</div>`;
+      ragBox.innerHTML = `<div class="empty-state" style="padding:16px;">No matching KB chunks (refusal guardrail active for out-of-scope queries).</div>`;
       return;
     }
     ragBox.innerHTML = chunks
       .map(
         (c) => `
-        <div class="rag-item">
-          <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-            <strong style="color:#c7d2fe;">${esc(c.title)}</strong>
-            <span class="tag">${Math.round(c.score * 100)}% match</span>
+        <div class="list-item">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
+            <strong style="font-size:12.5px;">${esc(c.title)}</strong>
+            <span class="badge blue">${Math.round(c.score * 100)}%</span>
           </div>
-          <div style="color:var(--muted);">${esc(c.content.slice(0, 170))}${c.content.length > 170 ? '…' : ''}</div>
+          <div style="font-size:11px; color:var(--ink-muted); margin-bottom:4px;">Sparse: ${c.sparse_score} · Dense: ${c.dense_score}</div>
+          <div style="font-size:12.5px; color:var(--ink-secondary);">${esc(c.content.slice(0, 165))}${c.content.length > 165 ? '…' : ''}</div>
         </div>`
       )
       .join('');
   }
 
-  // ---------------- Real-Time STT & TTS + Waveform ----------------
-  function speakText(text, locale = 'en-US') {
+  function renderToolsAndLatency(data) {
+    const lb = data.latency_breakdown || {};
+    $('latencyBox').innerHTML = `
+      <strong>Turn Latency Breakdown:</strong>
+      RAG ${lb.rag_ms ?? 0}ms · Generation ${lb.llm_ms ?? 0}ms · Total <strong>${data.latency_ms}ms</strong> · TTS: <code>${esc(data.tts_provider)}</code>`;
+
+    const logs = data.tool_logs || [];
+    $('toolLogsBox').innerHTML = logs.length
+      ? logs
+          .map(
+            (t) => `
+        <div class="list-item">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <code class="mono" style="font-size:12px; font-weight:600;">${esc(t.tool_name)}</code>
+            <span class="badge ${t.status === 'success' ? 'hot' : 'neg'}">${esc(t.status)} · ${t.duration_ms}ms</span>
+          </div>
+          <div style="font-size:12px; color:var(--ink-secondary); margin-top:4px;">${esc(t.summary)}</div>
+        </div>`
+          )
+          .join('')
+      : '<div class="empty-state">No tools executed.</div>';
+  }
+
+  // ---------------- Real-Time STT, TTS, VAD & Barge-In ----------------
+  async function speakReply(text, lang, locale = 'en-US', provider = 'browser') {
+    stopSpeaking();
+    // If an external server TTS provider (elevenlabs/google) is active, stream audio from /api/tts
+    if (provider && !provider.startsWith('browser') && provider !== 'local-wav') {
+      try {
+        const res = await fetch('/api/tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, language: lang, rate: state.ttsRate }),
+        });
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          state.activeAudio = audio;
+          state.isSpeaking = true;
+          $('voiceStatus').textContent = `Speaking (${provider})`;
+          audio.onended = () => {
+            state.isSpeaking = false;
+            URL.revokeObjectURL(url);
+            $('voiceStatus').textContent = 'Ready';
+            if ($('continuousVoiceToggle').checked && !state.isListening) startListening();
+          };
+          await audio.play();
+          return;
+        }
+      } catch {}
+    }
+
     if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = locale;
     utter.rate = state.ttsRate;
@@ -264,28 +382,28 @@
 
     utter.onstart = () => {
       state.isSpeaking = true;
-      $('voiceStatus').textContent = `Speaking (${locale}) — click Stop or speak to barge in`;
+      $('voiceStatus').textContent = `Speaking (${locale})`;
     };
     utter.onend = () => {
       state.isSpeaking = false;
       $('voiceStatus').textContent = state.isListening ? 'Listening...' : 'Ready';
-      if ($('continuousVoiceToggle').checked && !state.isListening) {
-        startListening();
-      }
+      if ($('continuousVoiceToggle').checked && !state.isListening) startListening();
     };
     window.speechSynthesis.speak(utter);
   }
 
   function stopSpeaking() {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (state.activeAudio) {
+      state.activeAudio.pause();
+      state.activeAudio = null;
     }
     state.isSpeaking = false;
   }
 
-  async function startWaveform() {
-    const canvas = $('waveformCanvas');
-    const ctx = canvas.getContext('2d');
+  async function ensureAudioAnalyser() {
+    if (state.analyser) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
     try {
       state.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -296,8 +414,14 @@
     } catch {
       state.analyser = null;
     }
+  }
 
-    const buf = new Uint8Array(state.analyser ? state.analyser.frequencyBinCount : 64);
+  async function startWaveform() {
+    const canvas = $('waveformCanvas');
+    const ctx = canvas.getContext('2d');
+    await ensureAudioAnalyser();
+    const buf = new Uint8Array(state.analyser ? state.analyser.frequencyBinCount : 48);
+
     const draw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const mid = canvas.height / 2;
@@ -305,24 +429,78 @@
         state.analyser.getByteFrequencyData(buf);
       } else {
         for (let i = 0; i < buf.length; i++) {
-          buf[i] = state.isSpeaking ? 45 + Math.sin(Date.now() / 120 + i) * 35 : 8 + Math.sin(Date.now() / 400 + i * 0.4) * 5;
+          buf[i] = state.isSpeaking
+            ? 38 + Math.sin(Date.now() / 110 + i * 0.6) * 28
+            : 4 + Math.sin(Date.now() / 500 + i * 0.4) * 3;
         }
       }
-      const barW = canvas.width / buf.length;
+      const step = canvas.width / buf.length;
       for (let i = 0; i < buf.length; i++) {
-        const h = Math.max(4, (buf[i] / 255) * (canvas.height - 14));
-        ctx.fillStyle = state.isListening ? '#f43f5e' : state.isSpeaking ? '#10b981' : '#6366f1';
-        ctx.fillRect(i * barW + 2, mid - h / 2, Math.max(2, barW - 4), h);
+        const h = Math.max(3, (buf[i] / 255) * (canvas.height - 8));
+        ctx.fillStyle = state.isListening ? '#dc2626' : state.isSpeaking ? '#059669' : '#cbd5e1';
+        ctx.fillRect(i * step + 1, mid - h / 2, Math.max(2, step - 3), h);
       }
       state.animFrame = requestAnimationFrame(draw);
     };
     if (!state.animFrame) draw();
   }
 
+  async function startServerAudioRecording() {
+    await ensureAudioAnalyser();
+    if (!state.micStream || typeof MediaRecorder === 'undefined') {
+      showToast('Microphone unavailable for server recording.', 'error');
+      return;
+    }
+    stopSpeaking();
+    state.recordedChunks = [];
+    const rec = new MediaRecorder(state.micStream);
+    state.mediaRecorder = rec;
+    state.isListening = true;
+    $('micToggleBtn').classList.add('listening');
+    $('micLabel').textContent = 'Stop & Send';
+    $('voiceStatus').textContent = 'Recording audio...';
+
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) state.recordedChunks.push(e.data);
+    };
+    rec.onstop = async () => {
+      state.isListening = false;
+      $('micToggleBtn').classList.remove('listening');
+      $('micLabel').textContent = 'Speak';
+      const blob = new Blob(state.recordedChunks, { type: rec.mimeType || 'audio/webm' });
+      const buf = await blob.arrayBuffer();
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      if (state.ws && state.wsReady) {
+        state.ws.send(
+          JSON.stringify({
+            type: 'audio_chunk',
+            audio_b64: b64,
+            mime_type: blob.type || 'audio/webm',
+            language_override: $('langSelect').value || null,
+          })
+        );
+      } else {
+        const fd = new FormData();
+        fd.append('audio', blob, 'speech.webm');
+        if ($('langSelect').value) fd.append('language', $('langSelect').value);
+        const r = await fetch('/api/stt', { method: 'POST', body: fd });
+        const d = await r.json();
+        if (d.transcript) sendTurn(d.transcript, 'voice');
+        else showToast(d.error || 'No transcript returned from server STT.', 'error');
+      }
+    };
+    rec.start();
+  }
+
   function startListening() {
+    if ($('serverAudioToggle').checked) {
+      startServerAudioRecording();
+      return;
+    }
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
-      $('voiceStatus').textContent = 'Web Speech API unavailable in this browser; use Chrome/Edge or text input.';
+      showToast('Browser STT unavailable; trying server audio recording or type below.', 'info');
+      startServerAudioRecording();
       return;
     }
     stopSpeaking();
@@ -335,8 +513,8 @@
     rec.onstart = () => {
       state.isListening = true;
       $('micToggleBtn').classList.add('listening');
-      $('micLabel').textContent = 'Listening... (Click to Stop)';
-      $('voiceStatus').textContent = `Listening (${rec.lang})...`;
+      $('micLabel').textContent = 'Listening...';
+      $('voiceStatus').textContent = `Listening (${rec.lang})`;
       startWaveform();
     };
 
@@ -356,13 +534,10 @@
     };
 
     rec.onerror = (e) => {
-      $('voiceStatus').textContent = `Mic note: ${e.error}`;
+      $('voiceStatus').textContent = `Mic: ${e.error}`;
       stopListening();
     };
-
-    rec.onend = () => {
-      stopListening();
-    };
+    rec.onend = () => stopListening();
 
     state.recognition = rec;
     rec.start();
@@ -371,10 +546,13 @@
   function stopListening() {
     state.isListening = false;
     $('micToggleBtn').classList.remove('listening');
-    $('micLabel').textContent = 'Start Voice Call (STT)';
+    $('micLabel').textContent = 'Speak';
     if (state.recognition) {
       try { state.recognition.stop(); } catch {}
       state.recognition = null;
+    }
+    if (state.mediaRecorder && state.mediaRecorder.state === 'recording') {
+      state.mediaRecorder.stop();
     }
   }
 
@@ -385,9 +563,7 @@
 
   $('stopSpeakBtn').addEventListener('click', () => {
     stopSpeaking();
-    if (state.ws && state.wsReady) {
-      state.ws.send(JSON.stringify({ type: 'barge_in' }));
-    }
+    if (state.ws && state.wsReady) state.ws.send(JSON.stringify({ type: 'barge_in' }));
   });
 
   $('textTurnForm').addEventListener('submit', (e) => {
@@ -397,8 +573,9 @@
     sendTurn(val, 'text');
   });
 
-  document.querySelectorAll('.chip').forEach((chip) => {
-    chip.addEventListener('click', () => sendTurn(chip.dataset.utterance, 'voice'));
+  $('runScenarioBtn').addEventListener('click', () => {
+    const val = $('scenarioSelect').value;
+    if (val) sendTurn(val, 'voice');
   });
 
   $('newCallBtn').addEventListener('click', () => {
@@ -408,92 +585,220 @@
     state.sessionId = `call-${Math.random().toString(36).slice(2, 10)}`;
     state.sentimentHistory = [0];
     $('transcriptBox').innerHTML = '';
-    $('ragChunksBox').innerHTML = '';
-    $('bookingStatusBox').textContent = 'No appointment booked yet.';
+    $('ragChunksBox').innerHTML = '<div class="empty-state" style="padding:18px;">Retrieved RAG knowledge chunks will appear here on each buyer turn.</div>';
+    $('toolLogsBox').innerHTML = '<div class="empty-state" style="padding:16px;">No tools executed yet.</div>';
+    $('bookingStatusBox').className = 'list-item';
+    $('bookingStatusBox').style = 'margin-bottom:0; color:var(--ink-muted); font-size:12.5px;';
+    $('bookingStatusBox').textContent = 'No meeting scheduled yet. Ask to book a demo to receive available business-hour slots.';
+    $('crmSyncPill').textContent = 'CRM: Standby';
+    $('crmSyncPill').className = 'badge';
     connectWebSocket();
+    appendMessage(
+      'assistant',
+      "Hello! You've reached Fortivex Sales. I can answer questions about pricing, security compliance, or CRM integrations in English, Hindi, Hinglish, Spanish, French, or German—and book a live demo when you're ready.",
+      { language: 'en' }
+    );
   });
 
+  // ---------------- Call Summary Modal ----------------
   $('endSummarizeBtn').addEventListener('click', async () => {
     const res = await fetch(`/api/sessions/${encodeURIComponent(state.sessionId)}/summarize`, { method: 'POST' });
-    if (res.ok) {
-      const summary = await res.json();
-      showSummaryToastAndSwitch(summary);
-    }
+    if (res.ok) openSummaryModal(await res.json());
   });
 
-  function showSummaryToastAndSwitch() {
-    document.querySelector('[data-view="view-insights"]').click();
+  function openSummaryModal(s) {
+    $('summaryModalBody').innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+        <div>
+          <strong style="font-size:15px;">${esc(s.lead_name)}</strong>
+          ${s.company ? `<span style="color:var(--ink-muted);"> · ${esc(s.company)}</span>` : ''}
+        </div>
+        <div style="display:flex; gap:6px;">
+          <span class="badge">${esc(s.language.toUpperCase())}</span>
+          <span class="badge ${s.qualification.tier === 'Disqualified' ? 'neg' : s.qualification.tier.toLowerCase()}">${s.qualification.score}/100 (${esc(s.qualification.tier)})</span>
+        </div>
+      </div>
+      <p style="margin:0 0 12px; color:var(--ink-secondary); line-height:1.6;">${esc(s.executive_summary)}</p>
+      <div class="kv-grid" style="margin-bottom:12px;">
+        <div class="kv-cell"><label>Sentiment Trend</label><div>${s.average_sentiment} (${esc(s.sentiment_trend)})</div></div>
+        <div class="kv-cell"><label>Appointment Outcome</label><div>${esc(s.appointment_outcome)}</div></div>
+        <div class="kv-cell"><label>Sources Cited</label><div>${(s.knowledge_sources_used || []).map(esc).join(', ') || 'None'}</div></div>
+        <div class="kv-cell"><label>Follow-Up Date</label><div>${esc(s.follow_up_date || '—')}</div></div>
+      </div>
+      <div style="font-size:12.5px; font-weight:600; margin-bottom:6px;">Next Recommended Actions</div>
+      <ul style="margin:0 0 16px; padding-left:18px; color:var(--ink-secondary);">
+        ${(s.next_steps || []).map((step) => `<li style="margin-bottom:4px;">${esc(step)}</li>`).join('')}
+      </ul>
+      <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <button class="btn btn-primary" id="viewAllInsightsBtn">Open Insights &amp; Recaps</button>
+      </div>`;
+    $('summaryModal').classList.add('open');
+    $('viewAllInsightsBtn').addEventListener('click', () => {
+      $('summaryModal').classList.remove('open');
+      switchMainView('view-insights');
+    });
   }
+  $('closeSummaryBtn').addEventListener('click', () => $('summaryModal').classList.remove('open'));
 
-  // ---------------- CRM, KB & Insights Views ----------------
+  // ---------------- CRM & Calendar View ----------------
   async function loadCRM() {
-    const [leadsRes, apptsRes, whRes] = await Promise.all([
+    const [leadsRes, apptsRes, whRes, statusRes] = await Promise.all([
       fetch('/api/leads'),
       fetch('/api/appointments'),
       fetch('/api/webhooks'),
+      fetch('/api/crm/status'),
     ]);
     const leads = await leadsRes.json();
     const appts = await apptsRes.json();
     const hooks = await whRes.json();
+    const crmStatus = await statusRes.json();
 
-    $('crmLeadsBody').innerHTML = leads
-      .map(
-        (l) => `
+    $('crmModeBadge').textContent = crmStatus.mode || 'local-sqlite';
+
+    $('crmLeadsBody').innerHTML = leads.length
+      ? leads
+          .map(
+            (l) => `
       <tr>
-        <td><strong>${esc(l.name)}</strong><br/><small style="color:var(--muted);">${esc(l.email || '—')}</small></td>
-        <td>${esc(l.company || '—')}<br/><small style="color:var(--muted);">${esc(l.role || '—')}</small></td>
-        <td><span class="tag">${esc(l.preferred_language.toUpperCase())}</span></td>
+        <td><strong>${esc(l.name)}</strong><br/><span style="font-size:12px; color:var(--ink-muted);">${esc([l.email, l.phone].filter(Boolean).join(' · ') || '—')}</span></td>
+        <td>${esc(l.company || '—')}<br/><span style="font-size:12px; color:var(--ink-muted);">${esc(l.role || '—')}</span></td>
+        <td><span class="badge">${esc(l.preferred_language.toUpperCase())}</span></td>
         <td><strong>${l.score}</strong>/100</td>
-        <td><span class="tag ${l.tier.toLowerCase()}">${esc(l.tier)}</span> <small>${esc(l.stage)}</small></td>
-        <td>$${Number(l.estimated_acv_usd || 0).toLocaleString()}</td>
-        <td>${(l.pain_points || []).map((p) => `<span class="tag">${esc(p)}</span>`).join('')}
-            ${(l.objections || []).map((o) => `<span class="tag neg">${esc(o)}</span>`).join('')}</td>
+        <td><span class="badge ${l.tier === 'Disqualified' ? 'neg' : l.tier.toLowerCase()}">${esc(l.tier)}</span> <span style="font-size:12px; color:var(--ink-secondary);">${esc(l.stage)}</span></td>
+        <td style="font-variant-numeric:tabular-nums;">$${Number(l.estimated_acv_usd || 0).toLocaleString()}</td>
+        <td><div class="tags-wrap" style="margin:0;">
+          ${(l.pain_points || []).map((p) => `<span class="badge blue">${esc(p)}</span>`).join('')}
+          ${(l.objections || []).map((o) => `<span class="badge neg">${esc(o)}</span>`).join('')}
+        </div></td>
       </tr>`
-      )
-      .join('');
+          )
+          .join('')
+      : `<tr><td colspan="7" class="empty-state">No CRM leads recorded yet.</td></tr>`;
 
     $('appointmentsList').innerHTML = appts.length
       ? appts
           .map(
             (a) => `
-        <div class="rag-item" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <div class="list-item" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
           <div>
-            <strong>${esc(a.lead_name)}</strong> (${esc(a.company || 'Prospect')}) · <span class="tag ${a.status === 'Confirmed' ? 'hot' : 'neg'}">${esc(a.status)}</span><br/>
-            <small style="color:var(--muted);">${esc(a.slot_iso)} · ${esc(a.meeting_link)}</small>
+            <strong>${esc(a.lead_name)}</strong>${a.company ? ` (${esc(a.company)})` : ''}
+            <span class="badge ${a.status === 'Cancelled' ? 'neg' : 'hot'}" style="margin-left:6px;">${esc(a.status)}</span><br/>
+            <span style="font-size:12px; color:var(--ink-muted);">${esc(new Date(a.slot_iso).toUTCString().replace(':00 GMT', ' UTC'))} · <code class="mono">${esc(a.id)}</code></span>
           </div>
-          ${a.status === 'Confirmed' ? `<button class="btn btn-danger cancel-appt" data-id="${esc(a.id)}" style="padding:4px 9px; font-size:11px;">Cancel</button>` : ''}
+          ${
+            a.status !== 'Cancelled'
+              ? `<div style="display:flex; gap:6px;">
+                  <button class="btn btn-sm resched-appt" data-id="${esc(a.id)}" data-name="${esc(a.lead_name)}" data-email="${esc(a.lead_email || '')}" data-company="${esc(a.company || '')}">Reschedule</button>
+                  <button class="btn btn-sm btn-danger-outline cancel-appt" data-id="${esc(a.id)}">Cancel</button>
+                </div>`
+              : ''
+          }
         </div>`
           )
           .join('')
-      : '<div style="color:var(--muted); font-size:13px;">No appointments scheduled.</div>';
+      : '<div class="empty-state">No appointments scheduled.</div>';
 
     document.querySelectorAll('.cancel-appt').forEach((b) => {
       b.addEventListener('click', async () => {
         await fetch(`/api/appointments/${encodeURIComponent(b.dataset.id)}`, { method: 'DELETE' });
+        showToast('Appointment cancelled', 'info');
         loadCRM();
       });
     });
 
+    document.querySelectorAll('.resched-appt').forEach((b) => {
+      b.addEventListener('click', () => openBookingModal(b.dataset));
+    });
+
     $('webhooksList').innerHTML = hooks.length
       ? hooks
-          .slice(0, 6)
+          .slice(0, 5)
           .map(
             (h) => `
-        <div class="rag-item">
-          <div style="display:flex; justify-content:space-between;">
-            <strong>${esc(h.event_type)}</strong>
-            <span class="tag hot">Delivered</span>
+        <div class="list-item">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <strong style="font-size:12.5px;">${esc(h.event_type)}</strong>
+            <span class="badge ${h.delivered ? 'hot' : 'neg'}">${h.delivered ? 'Delivered' : 'Failed'}</span>
           </div>
-          <small style="color:var(--muted);">${esc(h.target)} · ${esc(h.created_at)}</small>
+          <div style="font-size:11.5px; color:var(--ink-muted); margin-top:2px;">${esc(h.target)} · ${esc(h.created_at)}</div>
           <pre class="json-box">${esc(JSON.stringify(h.payload, null, 2))}</pre>
         </div>`
           )
           .join('')
-      : '<div style="color:var(--muted); font-size:13px;">No webhook events yet.</div>';
+      : '<div class="empty-state">No CRM delivery logs yet.</div>';
   }
 
   $('refreshCrmBtn').addEventListener('click', loadCRM);
+  $('backupDbBtn').addEventListener('click', async () => {
+    const res = await fetch('/api/admin/backup', { method: 'POST' });
+    if (res.ok) {
+      const d = await res.json();
+      showToast(`Backup created: ${d.backup_file}`, 'success');
+    } else {
+      showToast('Backup failed', 'error');
+    }
+  });
 
+  async function openBookingModal(reschedData = null) {
+    const res = await fetch('/api/appointments/slots');
+    const data = await res.json();
+    $('bookSlotSelect').innerHTML = (data.slots || [])
+      .map((s) => `<option value="${esc(s)}">${esc(new Date(s).toUTCString().replace(':00 GMT', ' UTC'))}</option>`)
+      .join('');
+
+    if (reschedData && reschedData.id) {
+      $('bookModalTitle').textContent = `Reschedule Appointment (${reschedData.id})`;
+      $('rescheduleApptId').value = reschedData.id;
+      $('bookLeadName').value = reschedData.name || '';
+      $('bookLeadEmail').value = reschedData.email || '';
+      $('bookCompany').value = reschedData.company || '';
+      $('bookLeadName').disabled = true;
+      $('bookSubmitBtn').textContent = 'Save New Slot';
+    } else {
+      $('bookModalTitle').textContent = 'Schedule Demo Appointment';
+      $('rescheduleApptId').value = '';
+      $('manualBookForm').reset();
+      $('bookLeadName').disabled = false;
+      $('bookSubmitBtn').textContent = 'Confirm Booking';
+    }
+    $('bookModal').classList.add('open');
+  }
+
+  $('openBookModalBtn').addEventListener('click', () => openBookingModal(null));
+  $('closeBookModalBtn').addEventListener('click', () => $('bookModal').classList.remove('open'));
+  $('manualBookForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const reschedId = $('rescheduleApptId').value;
+    let res;
+    if (reschedId) {
+      res = await fetch(`/api/appointments/${encodeURIComponent(reschedId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot_iso: $('bookSlotSelect').value }),
+      });
+    } else {
+      res = await fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lead_name: $('bookLeadName').value.trim(),
+          lead_email: $('bookLeadEmail').value.trim() || null,
+          company: $('bookCompany').value.trim() || null,
+          slot_iso: $('bookSlotSelect').value,
+        }),
+      });
+    }
+    if (res.ok) {
+      showToast(reschedId ? 'Appointment rescheduled' : 'Appointment confirmed', 'success');
+      $('bookModal').classList.remove('open');
+      loadCRM();
+    } else {
+      const err = await res.json();
+      showToast(err.detail || 'Booking error', 'error');
+    }
+  });
+
+  // ---------------- Knowledge Base View ----------------
   async function loadKnowledge() {
     const res = await fetch('/api/knowledge');
     const data = await res.json();
@@ -502,15 +807,33 @@
     $('kbChunksList').innerHTML = chunks
       .map(
         (c) => `
-      <div class="rag-item">
-        <div style="display:flex; justify-content:space-between;">
-          <strong>${esc(c.title)}</strong>
-          <span class="tag">${esc(c.category)}</span>
+      <div class="list-item">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <strong style="font-size:13px;">${esc(c.title)}</strong>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <span class="badge">${esc(c.category)}</span>
+            ${
+              c.parent_id && c.parent_id.startsWith('doc-')
+                ? `<button class="btn btn-sm btn-danger-outline del-doc-btn" data-id="${esc(c.parent_id)}">Delete</button>`
+                : ''
+            }
+          </div>
         </div>
-        <div style="color:var(--muted); margin-top:4px;">${esc(c.preview)}</div>
+        <div style="font-size:11px; color:var(--ink-muted); margin-top:2px;">Source: ${esc(c.source_file || c.doc_id)}</div>
+        <div style="color:var(--ink-secondary); font-size:12.5px; margin-top:4px;">${esc(c.preview)}</div>
       </div>`
       )
       .join('');
+
+    document.querySelectorAll('.del-doc-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await fetch(`/api/knowledge/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+        if (r.ok) {
+          showToast('Document removed from vector index', 'info');
+          loadKnowledge();
+        }
+      });
+    });
   }
 
   $('kbSearchForm').addEventListener('submit', async (e) => {
@@ -519,91 +842,187 @@
     if (!q) return;
     const res = await fetch(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
     const data = await res.json();
-    $('kbSearchResults').innerHTML = (data.results || [])
-      .map(
-        (r) => `
-      <div class="rag-item">
-        <div style="display:flex; justify-content:space-between;">
-          <strong>${esc(r.title)}</strong>
-          <span class="tag hot">${Math.round(r.score * 100)}% similarity</span>
+    $('kbSearchResults').innerHTML =
+      (data.results || [])
+        .map(
+          (r) => `
+      <div class="list-item">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong style="font-size:12.5px;">${esc(r.title)}</strong>
+          <span class="badge hot">${Math.round(r.score * 100)}% hybrid</span>
         </div>
-        <div style="margin-top:4px;">${esc(r.content)}</div>
+        <div style="font-size:11px; color:var(--ink-muted);">Sparse: ${r.sparse_score} · Dense: ${r.dense_score}</div>
+        <div style="font-size:12.5px; color:var(--ink-secondary); margin-top:4px;">${esc(r.content)}</div>
       </div>`
-      )
-      .join('') || '<div style="color:var(--muted);">No matching chunks above threshold.</div>';
+        )
+        .join('') || '<div class="empty-state">No matching knowledge chunks found.</div>';
+  });
+
+  $('kbFileForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const file = $('kbFileInput').files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('category', $('kbFileCategory').value || 'Uploaded');
+    const res = await fetch('/api/knowledge/upload', { method: 'POST', body: fd });
+    if (res.ok) {
+      const d = await res.json();
+      showToast(`Indexed ${d.added_chunks} chunks from ${d.filename}`, 'success');
+      $('kbFileForm').reset();
+      loadKnowledge();
+    } else {
+      const err = await res.json();
+      showToast(err.detail || 'Upload failed', 'error');
+    }
   });
 
   $('kbAddForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const payload = {
-      title: $('kbDocTitle').value,
-      category: $('kbDocCategory').value,
-      content: $('kbDocContent').value,
-    };
     const res = await fetch('/api/knowledge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        title: $('kbDocTitle').value,
+        category: $('kbDocCategory').value,
+        content: $('kbDocContent').value,
+      }),
     });
     if (res.ok) {
+      showToast('Knowledge document indexed', 'success');
       $('kbDocTitle').value = '';
       $('kbDocContent').value = '';
       loadKnowledge();
     }
   });
 
+  // ---------------- Call History View ----------------
+  async function loadCallHistory() {
+    const res = await fetch('/api/sessions');
+    const sessions = await res.json();
+    $('historySessionsList').innerHTML = sessions.length
+      ? sessions
+          .map(
+            (s) => `
+        <div class="session-row" data-sid="${esc(s.session_id)}">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <strong style="font-size:13px;">${esc(s.lead_name)}</strong>
+            <span class="badge ${s.tier === 'Disqualified' ? 'neg' : s.tier.toLowerCase()}">${s.score}/100</span>
+          </div>
+          <div style="font-size:11.5px; color:var(--ink-muted); margin-top:3px;">
+            ${esc(s.company || 'No company')} · ${esc(s.language.toUpperCase())} · ${s.message_count} msgs
+          </div>
+        </div>`
+          )
+          .join('')
+      : '<div class="empty-state">No recorded calls yet.</div>';
+
+    document.querySelectorAll('.session-row').forEach((row) => {
+      row.addEventListener('click', async () => {
+        document.querySelectorAll('.session-row').forEach((r) => r.classList.remove('active'));
+        row.classList.add('active');
+        const detailRes = await fetch(`/api/sessions/${encodeURIComponent(row.dataset.sid)}`);
+        if (!detailRes.ok) return;
+        const d = await detailRes.json();
+        $('historyDetailBox').innerHTML = `
+          <div class="kv-grid" style="margin-bottom:12px;">
+            <div class="kv-cell"><label>Session ID</label><div class="mono">${esc(d.session_id)}</div></div>
+            <div class="kv-cell"><label>Lead Tier &amp; Score</label><div>${esc(d.qualification.tier)} (${d.qualification.score}/100)</div></div>
+            <div class="kv-cell"><label>Long-Term Returning</label><div>${d.memory.returning_lead ? 'Yes' : 'No'} (Prior calls: ${d.memory.prior_calls_count})</div></div>
+            <div class="kv-cell"><label>Tools Executed</label><div>${(d.tool_logs || []).length} logged actions</div></div>
+          </div>
+          <div style="font-size:12.5px; font-weight:600; margin-bottom:6px;">Transcript</div>
+          <div style="max-height:280px; overflow-y:auto; margin-bottom:12px;">
+            ${(d.messages || [])
+              .map(
+                (m) => `<div class="list-item" style="margin-bottom:6px;">
+                  <strong>${m.role === 'user' ? 'Prospect' : 'Nova AI'}</strong> <span class="badge">${esc(m.language.toUpperCase())}</span>
+                  <div style="margin-top:3px; color:var(--ink-secondary);">${esc(m.text)}</div>
+                </div>`
+              )
+              .join('')}
+          </div>
+          <div style="font-size:12.5px; font-weight:600; margin-bottom:6px;">Tool Execution Audit</div>
+          <pre class="json-box">${esc(JSON.stringify(d.tool_logs || [], null, 2))}</pre>`;
+      });
+    });
+  }
+  $('refreshHistoryBtn').addEventListener('click', loadCallHistory);
+
+  // ---------------- Insights & Recaps View ----------------
   async function loadInsights() {
-    const [insRes, sumRes] = await Promise.all([fetch('/api/insights'), fetch('/api/summaries')]);
+    const params = new URLSearchParams();
+    if ($('filterDateFrom').value) params.set('date_from', $('filterDateFrom').value);
+    if ($('filterDateTo').value) params.set('date_to', $('filterDateTo').value);
+    if ($('filterTier').value) params.set('tier', $('filterTier').value);
+    if ($('filterOutcome').value) params.set('outcome', $('filterOutcome').value);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+
+    const [insRes, sumRes] = await Promise.all([fetch(`/api/insights${qs}`), fetch(`/api/summaries${qs}`)]);
     const ins = await insRes.json();
     const sums = await sumRes.json();
 
     $('insightsKpiGrid').innerHTML = [
       ['Total Calls', ins.total_calls],
-      ['Qualified Hot Leads', ins.hot_leads],
+      ['Unique Leads', ins.unique_leads],
+      ['Qualified (Hot+Warm)', ins.qualified_leads],
       ['Booked Demos', ins.booked_demos],
-      ['Demo Conversion', `${ins.conversion_rate_pct}%`],
-      ['Avg Lead Score', `${ins.average_lead_score}/100`],
-      ['Pipeline Value', `$${Number(ins.total_pipeline_usd || 0).toLocaleString()}`],
+      ['Booking Rate', `${ins.booking_rate_pct}%`],
+      ['Qualified Pipeline', `$${Number(ins.total_pipeline_usd || 0).toLocaleString()}`],
     ]
-      .map(([k, v]) => `<div class="stat-box"><small>${esc(k)}</small><strong>${esc(v)}</strong></div>`)
+      .map(([k, v]) => `<div class="kpi-card"><small>${esc(k)}</small><strong>${esc(v)}</strong></div>`)
       .join('');
 
-    const pains = (ins.top_pain_points || []).map((x) => `<span class="tag">${esc(x.label)} (${x.count})</span>`).join('') || '—';
-    const objs = (ins.top_objections || []).map((x) => `<span class="tag neg">${esc(x.label)} (${x.count})</span>`).join('') || '—';
+    const pains = (ins.top_pain_points || []).map((x) => `<span class="badge blue">${esc(x.label)} (${x.count})</span>`).join('') || '—';
+    const objs = (ins.top_objections || []).map((x) => `<span class="badge neg">${esc(x.label)} (${x.count})</span>`).join('') || '—';
+    const faqs = (ins.frequently_asked_questions || []).map((x) => `<span class="badge">${esc(x.topic)} (${x.count})</span>`).join('') || '—';
     $('insightsTrendsBox').innerHTML = `
-      <div style="margin-bottom:10px;"><small style="color:var(--muted); display:block; margin-bottom:4px;">Pain Points</small>${pains}</div>
-      <div><small style="color:var(--muted); display:block; margin-bottom:4px;">Common Objections</small>${objs}</div>`;
+      <div style="margin-bottom:10px;"><div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">Pain Points</div><div class="tags-wrap">${pains}</div></div>
+      <div style="margin-bottom:10px;"><div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">Objections</div><div class="tags-wrap">${objs}</div></div>
+      <div><div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">Frequently Asked Topics</div><div class="tags-wrap">${faqs}</div></div>`;
 
-    const langs = Object.entries(ins.language_distribution || {})
-      .map(([k, v]) => `<span class="tag">${esc(k.toUpperCase())}: ${v}</span>`)
-      .join('');
-    const stages = Object.entries(ins.stage_funnel || {})
-      .map(([k, v]) => `<span class="tag warm">${esc(k)}: ${v}</span>`)
-      .join('');
+    const langs = Object.entries(ins.language_distribution || {}).map(([k, v]) => `<span class="badge">${esc(k.toUpperCase())}: ${v}</span>`).join('');
+    const stages = Object.entries(ins.stage_funnel || {}).map(([k, v]) => `<span class="badge warm">${esc(k)}: ${v}</span>`).join('');
+    const perf = ins.agent_performance || {};
     $('insightsFunnelBox').innerHTML = `
-      <div style="margin-bottom:10px;"><small style="color:var(--muted); display:block; margin-bottom:4px;">Pipeline Stages</small>${stages}</div>
-      <div><small style="color:var(--muted); display:block; margin-bottom:4px;">Languages Served</small>${langs}</div>`;
+      <div style="margin-bottom:10px;"><div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">Pipeline Stages</div><div class="tags-wrap">${stages}</div></div>
+      <div style="margin-bottom:10px;"><div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">Languages Served</div><div class="tags-wrap">${langs}</div></div>
+      <div style="font-size:12.5px; color:var(--ink-secondary);">
+        Avg Turns/Call: <strong>${perf.avg_turns_per_call ?? 0}</strong> · Qualification Rate: <strong>${perf.qualification_rate_pct ?? 0}%</strong>
+      </div>`;
 
-    $('summariesList').innerHTML = sums
-      .map(
-        (s) => `
-      <div class="rag-item">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+    $('summariesList').innerHTML = sums.length
+      ? sums
+          .map(
+            (s) => `
+      <div class="list-item">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
           <strong>${esc(s.lead_name)}${s.company ? ` · ${esc(s.company)}` : ''}</strong>
-          <div>
-            <span class="tag">${esc(s.language.toUpperCase())}</span>
-            <span class="tag ${s.qualification.tier.toLowerCase()}">${s.qualification.score}/100 (${esc(s.qualification.tier)})</span>
-            <span class="tag">Sentiment: ${s.average_sentiment} (${esc(s.sentiment_trend)})</span>
+          <div style="display:flex; gap:6px;">
+            <span class="badge">${esc(s.language.toUpperCase())}</span>
+            <span class="badge ${s.qualification.tier === 'Disqualified' ? 'neg' : s.qualification.tier.toLowerCase()}">${s.qualification.score}/100 (${esc(s.qualification.tier)})</span>
+            <span class="badge">Sentiment: ${s.average_sentiment} (${esc(s.sentiment_trend)})</span>
           </div>
         </div>
-        <p style="margin:6px 0; line-height:1.5;">${esc(s.executive_summary)}</p>
-        <div style="font-size:12px; color:#a7f3d0;"><strong>Next Steps:</strong> ${(s.next_steps || []).map(esc).join(' · ')}</div>
+        <p style="margin:6px 0; color:var(--ink-secondary); line-height:1.55;">${esc(s.executive_summary)}</p>
+        <div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">
+          Sources: ${(s.knowledge_sources_used || []).map(esc).join(', ') || 'None'} · Follow-up: ${esc(s.follow_up_date || '—')}
+        </div>
+        <div style="font-size:12px; color:var(--green);"><strong>Next Steps:</strong> ${(s.next_steps || []).map(esc).join(' · ')}</div>
       </div>`
-      )
-      .join('');
+          )
+          .join('')
+      : '<div class="empty-state">No call summary reports match the current filters.</div>';
   }
 
-  $('refreshInsightsBtn').addEventListener('click', loadInsights);
+  $('applyFiltersBtn').addEventListener('click', loadInsights);
+  $('resetFiltersBtn').addEventListener('click', () => {
+    $('filterDateFrom').value = '';
+    $('filterDateTo').value = '';
+    $('filterTier').value = '';
+    $('filterOutcome').value = '';
+    loadInsights();
+  });
 
   // ---------------- Settings Modal ----------------
   $('openSettingsBtn').addEventListener('click', () => $('settingsModal').classList.add('open'));
@@ -614,25 +1033,36 @@
   });
   $('settingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const key = $('geminiKeyInput').value.trim();
+    const payload = {
+      stt_provider: $('sttProviderSelect').value,
+      tts_provider: $('ttsProviderSelect').value,
+      crm_mock_mode: $('crmMockToggle').checked,
+    };
+    if ($('geminiKeyInput').value.trim()) payload.gemini_api_key = $('geminiKeyInput').value.trim();
+    if ($('crmWebhookInput').value.trim()) payload.crm_webhook_url = $('crmWebhookInput').value.trim();
+    if ($('hubspotTokenInput').value.trim()) payload.hubspot_access_token = $('hubspotTokenInput').value.trim();
+
     const res = await fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gemini_api_key: key }),
+      body: JSON.stringify(payload),
     });
     if (res.ok) {
       const d = await res.json();
-      $('engineBadge').textContent = `Engine: ${d.ai_engine}`;
+      $('engineBadge').textContent = d.ai_engine;
       $('settingsModal').classList.remove('open');
+      showToast(`Settings saved (${d.ai_engine} · STT: ${d.stt_provider})`, 'success');
+    } else {
+      showToast('Failed to save configuration', 'error');
     }
   });
 
-  // Initialize
+  // Boot
   connectWebSocket();
   startWaveform();
   appendMessage(
     'assistant',
-    "Hi! I'm Nova, Fortivex's autonomous AI sales voice specialist. Ask me about pricing, SOC2 security, or CRM integrations in English, Spanish, French, German, or Hindi—or click a quick scenario above to test.",
+    "Hello! You've reached Fortivex Sales. I can answer questions about pricing, security compliance, or CRM integrations in English, Hindi, Hinglish, Spanish, French, or German—and book a live demo when you're ready.",
     { language: 'en' }
   );
 })();

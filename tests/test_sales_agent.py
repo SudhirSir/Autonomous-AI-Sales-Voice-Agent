@@ -23,7 +23,8 @@ def test_health_and_ui(tmp_path: Path) -> None:
 
     ui = client.get("/")
     assert ui.status_code == 200
-    assert "Fortivex AI Sales Voice Agent" in ui.text
+    assert "Fortivex" in ui.text
+    assert "Autonomous AI Sales Voice Agent" in ui.text
 
 
 def test_multilingual_rag_and_bant_progression(tmp_path: Path) -> None:
@@ -151,6 +152,8 @@ def test_websocket_real_time_call_and_custom_kb(tmp_path: Path) -> None:
         assert thinking["type"] == "agent_thinking"
 
         result = ws.receive_json()
+        while result["type"] == "turn_delta":
+            result = ws.receive_json()
         assert result["type"] == "turn_result"
         chunks = result["data"]["retrieved_chunks"]
         assert any("FedRAMP" in c["title"] or "FedRAMP" in c["content"] for c in chunks)

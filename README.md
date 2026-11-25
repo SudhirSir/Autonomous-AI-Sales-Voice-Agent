@@ -1,41 +1,53 @@
-# Fortivex Autonomous AI Sales Voice Agent
+# Fortivex — Autonomous AI Sales Voice Agent
 
-A functional, real-time AI-powered Autonomous Sales Voice Agent prototype built with **FastAPI**, **WebSockets**, **scikit-learn Hybrid RAG**, **SQLite CRM**, and a modern **Web Speech API + Audio Visualizer** frontend.
+An end-to-end, production-conscious AI Sales Voice Agent built with **FastAPI**, **WebSockets**, **Hybrid Dense + Sparse RAG**, **SQLite Atomic Transactions & Migrations**, **Pluggable STT/TTS & CRM Adapters**, and a **Modern SaaS Dashboard**.
 
-## Core Capabilities
+## Architecture & Documentation
 
-1. **Real-Time Voice Interaction (STT & TTS)**
-   - Live browser-based Speech-to-Text (`Web Speech API`) & Text-to-Speech (`SpeechSynthesis`) with barge-in interruption, push-to-talk, and continuous hands-free mode.
-   - Real-time WebSocket streaming (`/ws/call/{session_id}`) with Web Audio API waveform visualization and server-side `/api/stt` & `/api/tts` endpoints.
-2. **Contextual Memory & Multilingual Communication**
-   - Persistent per-session & cross-call entity memory (name, company, role, budget, timeline, team size, pain points, objections).
-   - Automatic language detection and fluent responses across **English (`en`)**, **Spanish (`es`)**, **French (`fr`)**, **German (`de`)**, and **Hindi (`hi`)**, with synchronized STT/TTS voice locales.
-3. **Intelligent Lead Qualification & Sentiment Analysis**
-   - Real-time **BANT** (Budget, Authority, Need, Timeline) extraction, dynamic 0–100 lead scoring, tier classification (`Hot`, `Warm`, `Cold`, `Disqualified`), and adaptive next-best-question steering.
-   - Per-turn sentiment polarity (`-1.0` to `+1.0`), emotion/signal detection (`buying_signal`, `price_objection`, `security_concern`, `competitor_comparison`), and live sentiment trajectory.
-4. **RAG-Based Knowledge Retrieval**
-   - Hybrid TF-IDF + multilingual keyword-bridge retriever (`scikit-learn`) over curated Fortivex product, pricing, compliance, integration, and competitor battlecard documents.
-   - Live RAG Inspector showing retrieved chunks, sources, and similarity scores, plus dynamic document ingestion via UI/API.
-5. **Automated Appointment Booking & CRM Integration**
-   - SQLite-backed availability calendar with conflict detection, natural-language date/time parsing, automated demo booking, and rescheduling.
-   - Full CRM pipeline (`leads`, `deals`, `activities`, `appointments`) with outbound CRM webhook payload logging (Salesforce/HubSpot schema).
-6. **Call Summarisation & Business Insights**
-   - Automated structured call summaries (TL;DR, BANT scorecard, objections, action items) and executive analytics dashboard (conversion funnel, sentiment trends, top objections, pipeline value).
+- [System Architecture & Diagrams](docs/ARCHITECTURE.md)
+- [Existing Codebase Audit](docs/IMPLEMENTATION_AUDIT.md)
+- [REST & WebSocket API Reference](docs/API_DOCUMENTATION.md)
 
-## Quick Start
+## Six Core Requirements Implemented
+
+| Requirement | Implementation Summary | Status |
+|---|---|---|
+| **1. Real-Time Voice (STT & TTS)** | Pluggable `VoiceProviderRegistry` (`Deepgram`, `Whisper`, `Gemini Audio`, `ElevenLabs`, `Google Cloud TTS`, `Local WAV`, plus Browser Web Speech + MediaRecorder fallback), WebSocket streaming (`turn_delta`), barge-in (`tts_stop`), and latency breakdown. | **IMPLEMENTED AND VERIFIED** (External cloud voice APIs require keys; local WAV + Browser STT/TTS verified live) |
+| **2. Contextual Memory & Multilingual AI** | 3-tier memory (`short_term_turns`, `session_facts`, `long_term_profile` across calls via email/phone/company) + **English, Hindi, Hinglish, Spanish, French, German** detection and response generation. | **IMPLEMENTED AND VERIFIED** |
+| **3. Lead Qualification & Sentiment** | Deterministic BANT scoring (0–100) with explainable rationale, `Hot`/`Warm`/`Cold`/`Disqualified` tiers, `score_history` persistence, and sentiment separated from `intent_score` & `purchase_readiness`. | **IMPLEMENTED AND VERIFIED** |
+| **4. Hybrid RAG Knowledge Engine** | `.pdf`, `.docx`, `.txt`, `.md` ingestion + chunking + Sparse TF-IDF + Dense LSA/Gemini embeddings + Reciprocal Rank Fusion + strict out-of-scope refusal guardrail + RAG benchmark (`scripts/eval_rag.py`). | **IMPLEMENTED AND VERIFIED** |
+| **5. Automated Appointment Booking** | Natural-language date/time parsing, Mon–Fri business-hour validation, `BEGIN IMMEDIATE` atomic locking preventing concurrent double-booking (`409 Conflict`), rescheduling (`PATCH`), and cancellation (`DELETE`). | **IMPLEMENTED AND VERIFIED** |
+| **6. Call Summarisation & CRM / BI** | Modular CRM layer (`SQLite`, `Webhook` with exponential backoff retries, `HubSpot`, `Salesforce`, `Mock`) + structured `CallSummary` reports + filtered analytics (`date_from`, `date_to`, `tier`, `outcome`). | **IMPLEMENTED AND VERIFIED** (HubSpot/Salesforce require external credentials; webhook retries & SQLite verified) |
+
+## Installation & Quick Start
 
 ```powershell
-# Optional: configure Gemini API key for LLM-enhanced generation (works 100% out-of-the-box without it)
+# 1. Install dependencies
+python -m pip install -r requirements.txt
+
+# 2. Optional: configure API keys (system runs 100% locally without external keys)
 Copy-Item .env.example .env
 
-# Run the FastAPI server
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# 3. Start the server
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000` in Chrome or Edge (recommended for full Web Speech API microphone support).
+Open **http://127.0.0.1:8000** in Chrome or Edge.
 
-## Running Tests
+## Testing & RAG Evaluation
 
 ```powershell
+# Run full unit & integration test suite (11 tests)
 python -m pytest -v
+
+# Run Hybrid RAG vs Sparse TF-IDF evaluation benchmark
+python scripts/eval_rag.py
 ```
+
+### Observed Benchmark Results (`scripts/eval_rag.py`)
+- `sparse_only`: `recall@3 = 1.0`, `precision@3 = 0.738`, `mrr = 0.857`, `unknown_rejection_rate = 0.5`
+- `hybrid_rrf`: `recall@3 = 1.0`, `precision@3 = 0.619`, `mrr = 1.0`, `unknown_rejection_rate = 1.0`
+
+## Known Limitations
+- Live cloud STT/TTS (`Deepgram`, `Whisper`, `ElevenLabs`, `Google Cloud TTS`) and live external CRMs (`HubSpot`, `Salesforce`) require valid API credentials in `.env` or runtime Settings; without them, the system operates in `local-hybrid` + `browser-webspeech` + `local-sqlite` mode.
+- Rate limiting and WebSocket state use single-process in-memory buckets; multi-worker deployment would require Redis-backed state.
