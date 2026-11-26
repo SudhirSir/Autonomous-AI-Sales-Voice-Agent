@@ -30,6 +30,8 @@
         <span id="wsLabel">Connecting</span>
       </span>
       <span class="status-pill mono" id="engineBadge" style="font-size:11.5px;">local-hybrid</span>
+      <span class="status-pill mono" id="voiceProviderBadge" style="font-size:11px;" title="Active STT / TTS Providers">STT: — · TTS: —</span>
+      <button class="btn btn-sm" id="authBtn" style="display:none;">Sign In</button>
       <button class="btn btn-sm" id="newCallBtn">New Call</button>
       <button class="btn btn-sm" id="openSettingsBtn">Settings</button>
     </div>
@@ -66,6 +68,16 @@
                     <option value="de">German (DE)</option>
                   </select>
                 </label>
+                <label style="font-size:12.5px; color:var(--ink-secondary); display:flex; align-items:center; gap:6px;">
+                  Timezone
+                  <select id="timezoneSelect" class="select" style="padding:5px 9px; font-size:12px;">
+                    <option value="UTC">UTC</option>
+                    <option value="Asia/Kolkata">IST (Asia/Kolkata)</option>
+                    <option value="America/New_York">EST/EDT (New York)</option>
+                    <option value="America/Los_Angeles">PST/PDT (Los Angeles)</option>
+                    <option value="Europe/Berlin">CET/CEST (Berlin)</option>
+                  </select>
+                </label>
                 <label class="toggle-label">
                   <input type="checkbox" id="autoSpeakToggle" checked />
                   Speak Replies (TTS)
@@ -79,7 +91,10 @@
                   Server Audio STT
                 </label>
               </div>
-              <span id="interimText" style="font-size:12px; color:var(--accent); font-style:italic;"></span>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span class="badge warm" id="bargeInBadge" style="display:none;">Interrupted (Barge-In)</span>
+                <span id="interimText" style="font-size:12px; color:var(--accent); font-style:italic;"></span>
+              </div>
             </div>
 
             <div class="audio-panel">
@@ -153,9 +168,13 @@
                   <div class="bant-head"><span>Need</span><span id="bantNeedText">Exploring</span></div>
                   <div class="bar-track"><div class="bar-fill" id="bantNeedBar" style="width:0%"></div></div>
                 </div>
-                <div class="bant-item" style="margin-bottom:14px;">
+                <div class="bant-item" style="margin-bottom:10px;">
                   <div class="bant-head"><span>Timeline</span><span id="bantTimeText">Not disclosed</span></div>
                   <div class="bar-track"><div class="bar-fill" id="bantTimeBar" style="width:0%"></div></div>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:var(--ink-muted); margin-bottom:12px;">
+                  <span id="bantCompleteness">BANT Completeness: 0/4</span>
+                  <span id="bantMissingText">Missing: budget, authority, need, timeline</span>
                 </div>
 
                 <div class="kv-grid">
@@ -250,8 +269,11 @@
           <div class="card-body" id="appointmentsList"></div>
         </div>
         <div class="card">
-          <div class="card-header"><h2 class="card-title">CRM Delivery &amp; Webhook Audit</h2></div>
-          <div class="card-body" id="webhooksList"></div>
+          <div class="card-header"><h2 class="card-title">CRM Sync Status &amp; Failed Jobs (DLQ)</h2></div>
+          <div class="card-body">
+            <div id="crmSyncJobsBox" style="margin-bottom:12px;"></div>
+            <div id="webhooksList"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -391,6 +413,7 @@
                 <option value="deepgram">Deepgram</option>
                 <option value="whisper">Whisper (OpenAI)</option>
                 <option value="gemini">Gemini Audio</option>
+                <option value="faster-whisper">Faster-Whisper (Local)</option>
                 <option value="browser">Browser Web Speech</option>
               </select>
             </label>
@@ -399,7 +422,8 @@
                 <option value="auto">Auto</option>
                 <option value="elevenlabs">ElevenLabs</option>
                 <option value="google">Google Cloud TTS</option>
-                <option value="local-wav">Local WAV Fallback</option>
+                <option value="piper">Piper (Local Neural)</option>
+                <option value="windows-sapi">Windows SAPI (Local)</option>
                 <option value="browser">Browser SpeechSynthesis</option>
               </select>
             </label>
@@ -452,6 +476,25 @@
             <select id="bookSlotSelect" class="select" style="width:100%; margin-top:4px;"></select>
           </label>
           <button type="submit" class="btn btn-primary" id="bookSubmitBtn">Confirm Booking</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth Modal -->
+  <div class="modal-backdrop" id="authModal">
+    <div class="modal">
+      <div class="card-header">
+        <h2 class="card-title">API Session Sign-In</h2>
+        <button class="btn btn-sm" id="closeAuthModalBtn">Close</button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12.5px; color:var(--ink-secondary); margin-top:0;">
+          Enter your Fortivex API token to authenticate an HttpOnly browser session. Tokens are never stored in JavaScript.
+        </p>
+        <form id="authForm" style="display:flex; flex-direction:column; gap:10px;">
+          <input id="authTokenInput" class="input" type="password" placeholder="Fortivex API Token" required />
+          <button type="submit" class="btn btn-primary">Authenticate Session</button>
         </form>
       </div>
     </div>

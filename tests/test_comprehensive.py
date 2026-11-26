@@ -20,6 +20,7 @@ from app.security import RateLimiter
 
 
 def _make_client(tmp_path: Path) -> TestClient:
+    os.environ["GEMINI_API_KEY"] = ""
     app = create_app(db_path=tmp_path / "test_fortivex.db")
     return TestClient(app)
 

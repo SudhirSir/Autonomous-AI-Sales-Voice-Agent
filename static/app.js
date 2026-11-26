@@ -91,6 +91,7 @@
       const msg = JSON.parse(event.data);
       if (msg.type === 'session_ready') {
         $('engineBadge').textContent = msg.ai_engine;
+        $('voiceProviderBadge').textContent = `STT: ${msg.stt_provider || '—'} · TTS: ${msg.tts_provider || '—'}`;
         if (msg.memory) renderMemory(msg.memory);
         if (msg.qualification) renderQualification(msg.qualification);
       } else if (msg.type === 'transcript_stt') {
@@ -101,6 +102,7 @@
         }
       } else if (msg.type === 'agent_thinking') {
         $('voiceStatus').textContent = 'Thinking...';
+        $('bargeInBadge').style.display = 'none';
         state.streamingBubble = null;
       } else if (msg.type === 'turn_delta') {
         updateStreamingBubble(msg.delta);
@@ -114,6 +116,8 @@
         openSummaryModal(msg.summary);
       } else if (msg.type === 'tts_stop') {
         stopSpeaking();
+        $('bargeInBadge').style.display = 'inline-flex';
+        $('voiceStatus').textContent = 'Interrupted (Barge-In)';
       }
     };
   }
@@ -142,6 +146,7 @@
     appendMessage('user', clean, { language: chosenLang || 'auto' });
 
     const langOverride = chosenLang || null;
+    const tz = $('timezoneSelect') ? $('timezoneSelect').value : 'UTC';
     if (state.ws && state.wsReady && state.ws.readyState === WebSocket.OPEN) {
       state.ws.send(
         JSON.stringify({
@@ -149,6 +154,7 @@
           text: clean,
           language_override: langOverride,
           input_mode: inputMode,
+          timezone: tz,
         })
       );
       return;
@@ -163,6 +169,7 @@
         text: clean,
         language_override: langOverride,
         input_mode: inputMode,
+        timezone: tz,
       }),
     });
     if (res.ok) {
@@ -175,11 +182,24 @@
 
   function handleTurnResponse(data) {
     $('engineBadge').textContent = data.ai_engine;
-    $('voiceStatus').textContent = `${data.latency_ms}ms · ${data.language.toUpperCase()}`;
+    $('voiceProviderBadge').textContent = `STT: ${data.stt_provider || '—'} · TTS: ${data.tts_provider || '—'}`;
+    $('voiceStatus').textContent = `${data.latency_ms}ms · ${data.language.toUpperCase()}${data.intent ? ' · ' + data.intent.intent : ''}`;
 
     const syncPill = $('crmSyncPill');
-    syncPill.textContent = data.crm_synced ? `CRM: ${data.crm_mode}` : 'CRM: Standby';
-    syncPill.className = data.crm_synced ? 'badge hot' : 'badge';
+    const extStat = data.external_crm_status || 'not_configured';
+    if (extStat === 'synced') {
+      syncPill.textContent = `Saved locally · CRM Synced (${data.crm_mode})`;
+      syncPill.className = 'badge hot';
+    } else if (extStat === 'failed') {
+      syncPill.textContent = 'Saved locally · External CRM Failed';
+      syncPill.className = 'badge neg';
+    } else if (extStat === 'mock') {
+      syncPill.textContent = 'Saved locally · Mock CRM Mode';
+      syncPill.className = 'badge warm';
+    } else {
+      syncPill.textContent = 'Saved locally (SQLite)';
+      syncPill.className = 'badge blue';
+    }
 
     appendMessage('assistant', data.reply_text, {
       language: data.language,
@@ -245,6 +265,11 @@
     $('bantNeedBar').style.width = `${(b.need_score / 25) * 100}%`;
     $('bantTimeText').textContent = b.timeline || 'Not disclosed';
     $('bantTimeBar').style.width = `${(b.timeline_score / 25) * 100}%`;
+
+    const missing = q.missing_dimensions || [];
+    const filled = 4 - missing.length;
+    $('bantCompleteness').textContent = `BANT Completeness: ${filled}/4 · Priority: ${q.lead_priority || 'P3'}`;
+    $('bantMissingText').textContent = missing.length ? `Missing: ${missing.join(', ')}` : 'All 4 BANT dimensions captured';
   }
 
   function renderMemory(m, stage = 'Discovery') {
@@ -295,8 +320,13 @@
     }
 
     const gBadge = $('kbGroundedBadge');
-    gBadge.textContent = data.kb_grounded ? 'Grounded' : 'Out-of-Scope Guardrail';
-    gBadge.className = `badge ${data.kb_grounded ? 'hot' : 'warm'}`;
+    if (data.contradiction_detected) {
+      gBadge.textContent = 'Contradiction Warning';
+      gBadge.className = 'badge neg';
+    } else {
+      gBadge.textContent = data.kb_grounded ? 'Grounded' : 'Out-of-Scope Guardrail';
+      gBadge.className = `badge ${data.kb_grounded ? 'hot' : 'warm'}`;
+    }
 
     const ragBox = $('ragChunksBox');
     const chunks = data.retrieved_chunks || [];
@@ -304,19 +334,23 @@
       ragBox.innerHTML = `<div class="empty-state" style="padding:16px;">No matching KB chunks (refusal guardrail active for out-of-scope queries).</div>`;
       return;
     }
-    ragBox.innerHTML = chunks
-      .map(
-        (c) => `
+    ragBox.innerHTML =
+      (data.contradiction_note ? `<div class="list-item" style="border-color:var(--red-border); color:#991b1b; font-size:12px;">${esc(data.contradiction_note)}</div>` : '') +
+      chunks
+        .map(
+          (c) => `
         <div class="list-item">
           <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px;">
-            <strong style="font-size:12.5px;">${esc(c.title)}</strong>
-            <span class="badge blue">${Math.round(c.score * 100)}%</span>
+            <strong style="font-size:12.5px;">#${c.rank || 1} ${esc(c.title)}</strong>
+            <span class="badge blue">${Math.round((c.final_confidence || c.score) * 100)}% conf</span>
           </div>
-          <div style="font-size:11px; color:var(--ink-muted); margin-bottom:4px;">Sparse: ${c.sparse_score} · Dense: ${c.dense_score}</div>
+          <div style="font-size:11px; color:var(--ink-muted); margin-bottom:4px;">
+            Doc: ${esc(c.source_file || c.doc_id)} · Sparse: ${c.sparse_score} · Dense: ${c.dense_score} · RRF: ${c.rrf_score ?? 0} · Rerank: ${c.reranker_score ?? 0}
+          </div>
           <div style="font-size:12.5px; color:var(--ink-secondary);">${esc(c.content.slice(0, 165))}${c.content.length > 165 ? '…' : ''}</div>
         </div>`
-      )
-      .join('');
+        )
+        .join('');
   }
 
   function renderToolsAndLatency(data) {
@@ -345,15 +379,16 @@
   // ---------------- Real-Time STT, TTS, VAD & Barge-In ----------------
   async function speakReply(text, lang, locale = 'en-US', provider = 'browser') {
     stopSpeaking();
-    // If an external server TTS provider (elevenlabs/google) is active, stream audio from /api/tts
-    if (provider && !provider.startsWith('browser') && provider !== 'local-wav') {
+    // Use server TTS whenever a genuine server speech synthesizer is active
+    if (provider && !provider.startsWith('browser')) {
       try {
         const res = await fetch('/api/tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, language: lang, rate: state.ttsRate }),
         });
-        if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.startsWith('audio/')) {
           const blob = await res.blob();
           const url = URL.createObjectURL(blob);
           const audio = new Audio(url);
@@ -655,6 +690,40 @@
 
     $('crmModeBadge').textContent = crmStatus.mode || 'local-sqlite';
 
+    const jobs = crmStatus.all_jobs || [];
+    $('crmSyncJobsBox').innerHTML = jobs.length
+      ? jobs
+          .slice(0, 6)
+          .map(
+            (j) => `
+        <div class="list-item" style="margin-bottom:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <strong style="font-size:12.5px;">${esc(j.adapter)} · ${esc(j.operation)}</strong>
+            <div style="display:flex; gap:6px; align-items:center;">
+              <span class="badge ${j.status === 'synced' ? 'hot' : j.status === 'mock' ? 'warm' : 'neg'}">${esc(j.status)}${j.http_status ? ' (' + j.http_status + ')' : ''}</span>
+              ${j.status === 'failed' ? `<button class="btn btn-sm retry-crm-btn" data-job="${esc(j.id)}">Retry</button>` : ''}
+            </div>
+          </div>
+          <div style="font-size:11.5px; color:var(--ink-muted); margin-top:3px;">
+            Record ID: <code class="mono">${esc(j.external_record_id || 'none')}</code> · Retries: ${j.retry_count ?? 0}${j.error_code ? ' · Code: ' + esc(j.error_code) : ''}
+          </div>
+          ${j.failure_reason ? `<div style="font-size:11.5px; color:var(--ink-secondary); margin-top:3px;">${esc(j.failure_reason)}</div>` : ''}
+        </div>`
+          )
+          .join('')
+      : '<div class="list-item" style="font-size:12px; color:var(--ink-muted);">Saved locally (SQLite). No external CRM adapter configured.</div>';
+
+    document.querySelectorAll('.retry-crm-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const r = await fetch(`/api/crm/retry/${encodeURIComponent(btn.dataset.job)}`, { method: 'POST' });
+        if (r.ok) {
+          const d = await r.json();
+          showToast(`Retry ${d.provider}: ${d.external_sync_status}`, d.external_sync_status === 'synced' ? 'success' : 'error');
+          loadCRM();
+        }
+      });
+    });
+
     $('crmLeadsBody').innerHTML = leads.length
       ? leads
           .map(
@@ -740,10 +809,12 @@
   });
 
   async function openBookingModal(reschedData = null) {
-    const res = await fetch('/api/appointments/slots');
+    const tz = $('timezoneSelect') ? $('timezoneSelect').value : 'UTC';
+    const res = await fetch(`/api/appointments/slots?timezone=${encodeURIComponent(tz)}`);
     const data = await res.json();
-    $('bookSlotSelect').innerHTML = (data.slots || [])
-      .map((s) => `<option value="${esc(s)}">${esc(new Date(s).toUTCString().replace(':00 GMT', ' UTC'))}</option>`)
+    const localSlots = data.local_slots || (data.slots || []).map((s) => ({ slot_iso: s, local_display: s }));
+    $('bookSlotSelect').innerHTML = localSlots
+      .map((item) => `<option value="${esc(item.slot_iso)}">${esc(item.local_display)} (${esc(item.slot_iso)})</option>`)
       .join('');
 
     if (reschedData && reschedData.id) {
@@ -968,6 +1039,7 @@
       ['Qualified (Hot+Warm)', ins.qualified_leads],
       ['Booked Demos', ins.booked_demos],
       ['Booking Rate', `${ins.booking_rate_pct}%`],
+      ['Avg Real Duration', `${ins.average_call_duration_sec ?? 0}s`],
       ['Qualified Pipeline', `$${Number(ins.total_pipeline_usd || 0).toLocaleString()}`],
     ]
       .map(([k, v]) => `<div class="kpi-card"><small>${esc(k)}</small><strong>${esc(v)}</strong></div>`)
@@ -988,7 +1060,10 @@
       <div style="margin-bottom:10px;"><div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">Pipeline Stages</div><div class="tags-wrap">${stages}</div></div>
       <div style="margin-bottom:10px;"><div style="font-size:12px; color:var(--ink-muted); margin-bottom:4px;">Languages Served</div><div class="tags-wrap">${langs}</div></div>
       <div style="font-size:12.5px; color:var(--ink-secondary);">
-        Avg Turns/Call: <strong>${perf.avg_turns_per_call ?? 0}</strong> · Qualification Rate: <strong>${perf.qualification_rate_pct ?? 0}%</strong>
+        Avg Turns/Call: <strong>${perf.avg_turns_per_call ?? 0}</strong> ·
+        Avg Latency: <strong>${perf.avg_response_latency_ms ?? 0}ms</strong> ·
+        Interruptions: <strong>${perf.total_interruptions ?? 0}</strong> ·
+        Qualification Rate: <strong>${perf.qualification_rate_pct ?? 0}%</strong>
       </div>`;
 
     $('summariesList').innerHTML = sums.length
@@ -1057,7 +1132,44 @@
     }
   });
 
+  // ---------------- Auth Session Modal ----------------
+  async function checkAuthStatus() {
+    try {
+      const r = await fetch('/api/auth/status');
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.token_required && !d.authenticated) {
+        $('authBtn').style.display = 'inline-flex';
+      } else {
+        $('authBtn').style.display = 'none';
+      }
+    } catch {}
+  }
+
+  if ($('authBtn')) {
+    $('authBtn').addEventListener('click', () => $('authModal').classList.add('open'));
+    $('closeAuthModalBtn').addEventListener('click', () => $('authModal').classList.remove('open'));
+    $('authForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token = $('authTokenInput').value;
+      const r = await fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      if (r.ok) {
+        $('authTokenInput').value = '';
+        $('authModal').classList.remove('open');
+        $('authBtn').style.display = 'none';
+        showToast('Authenticated session active', 'success');
+      } else {
+        showToast('Invalid API token', 'error');
+      }
+    });
+  }
+
   // Boot
+  checkAuthStatus();
   connectWebSocket();
   startWaveform();
   appendMessage(

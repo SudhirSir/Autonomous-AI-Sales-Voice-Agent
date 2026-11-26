@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1060" width="1440" height="1060" font-family="Inter, Segoe UI, system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="#475569" />
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="#2563eb" />
+    </marker>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="106%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.06" />
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1440" height="1060" fill="#f8fafc" />
+
+  <!-- Header -->
+  <rect x="24" y="18" width="1392" height="62" rx="10" fill="#0f172a" />
+  <text x="48" y="46" fill="#ffffff" font-size="21" font-weight="700">Fortivex V2 — Autonomous AI Sales Voice Agent: System Architecture</text>
+  <text x="48" y="67" fill="#94a3b8" font-size="12.5">Real-Time Streaming Voice &amp; Barge-In | 11-Tool LLM Orchestration | Hybrid RAG + Reranker | Atomic Timezone Booking | Upsert CRM + DLQ</text>
+
+  <!-- TIER 1: Client & Streaming Interface -->
+  <rect x="24" y="96" width="1392" height="128" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5" />
+  <text x="40" y="117" fill="#1e40af" font-size="12" font-weight="700" letter-spacing="0.6">TIER 1 · CLIENT WORKSPACE &amp; REAL-TIME VOICE STREAMING</text>
+
+  <rect x="40" y="128" width="440" height="82" rx="8" fill="#ffffff" stroke="#93c5fd" filter="url(#shadow)" />
+  <text x="56" y="150" fill="#0f172a" font-size="14" font-weight="700">SaaS Web Dashboard (static/index.html, app.js)</text>
+  <text x="56" y="170" fill="#475569" font-size="12">Views: Live Call Studio · CRM &amp; DLQ · Knowledge Base · History · Insights</text>
+  <text x="56" y="189" fill="#64748b" font-size="11.5">Cookie Auth Modal · Timezone Selector · RAG Inspector · Barge-In Indicator</text>
+
+  <rect x="504" y="128" width="440" height="82" rx="8" fill="#ffffff" stroke="#93c5fd" filter="url(#shadow)" />
+  <text x="520" y="150" fill="#0f172a" font-size="14" font-weight="700">Browser Audio, VAD &amp; Playback Engine</text>
+  <text x="520" y="170" fill="#475569" font-size="12">Web Audio Analyser + Live Waveform Canvas + MediaRecorder Capture</text>
+  <text x="520" y="189" fill="#64748b" font-size="11.5">Browser Web Speech Fallback + Incremental Audio Playback Queue</text>
+
+  <rect x="968" y="128" width="432" height="82" rx="8" fill="#ffffff" stroke="#93c5fd" filter="url(#shadow)" />
+  <text x="984" y="150" fill="#0f172a" font-size="14" font-weight="700">Streaming Transport &amp; REST Channels</text>
+  <text x="984" y="170" fill="#475569" font-size="12">WebSocket /ws/call/{id}: turn_delta, tts_audio_chunk, barge_in -&gt; tts_stop</text>
+  <text x="984" y="189" fill="#64748b" font-size="11.5">REST: /api/turn, /api/stt, /api/tts, /api/knowledge/*, /api/appointments/*</text>
+
+  <!-- Vertical Connectors Tier 1 -> Tier 2 -->
+  <line x1="260" y1="210" x2="260" y2="256" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)" />
+  <line x1="724" y1="210" x2="724" y2="256" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)" />
+  <line x1="1184" y1="210" x2="1184" y2="256" stroke="#2563eb" stroke-width="2" marker-end="url(#arrow-blue)" />
+
+  <!-- TIER 2: API Gateway, Security & Voice Pipeline -->
+  <rect x="24" y="256" width="1392" height="148" rx="10" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5" />
+  <text x="40" y="277" fill="#166534" font-size="12" font-weight="700" letter-spacing="0.6">TIER 2 · API GATEWAY, SECURITY &amp; GENUINE VOICE PROVIDER REGISTRY</text>
+
+  <rect x="40" y="288" width="440" height="102" rx="8" fill="#ffffff" stroke="#86efac" filter="url(#shadow)" />
+  <text x="56" y="310" fill="#0f172a" font-size="14" font-weight="700">FastAPI Gateway &amp; Security (app/main.py, security.py)</text>
+  <text x="56" y="330" fill="#475569" font-size="12">HttpOnly Session Cookie + Bearer/X-API-Key + WS Token Guard</text>
+  <text x="56" y="349" fill="#475569" font-size="12">Redis-Capable RateLimiter (RPM) · Strict CORS · Upload Magic-Byte Guard</text>
+  <text x="56" y="368" fill="#64748b" font-size="11.5">Async Cancellation Tokens (asyncio.Task + threading.Event) · PII Masking</text>
+
+  <rect x="504" y="288" width="896" height="102" rx="8" fill="#ffffff" stroke="#86efac" filter="url(#shadow)" />
+  <text x="520" y="310" fill="#0f172a" font-size="14" font-weight="700">Pluggable Voice Provider Registry (app/voice.py) — Zero Fake Audio</text>
+
+  <rect x="520" y="320" width="424" height="58" rx="6" fill="#f8fafc" stroke="#cbd5e1" />
+  <text x="532" y="340" fill="#0f172a" font-size="12.5" font-weight="600">STT Providers (STTProvider Interface)</text>
+  <text x="532" y="358" fill="#475569" font-size="11.5">Deepgram Nova-2 | OpenAI Whisper | Gemini Audio</text>
+  <text x="532" y="372" fill="#64748b" font-size="11">Local Faster-Whisper (timestamps) | Honest Browser Fallback</text>
+
+  <rect x="960" y="320" width="424" height="58" rx="6" fill="#f8fafc" stroke="#cbd5e1" />
+  <text x="972" y="340" fill="#0f172a" font-size="12.5" font-weight="600">TTS Providers (TTSProvider Interface)</text>
+  <text x="972" y="358" fill="#475569" font-size="11.5">ElevenLabs | Google Cloud TTS | Piper Neural (.onnx)</text>
+  <text x="972" y="372" fill="#64748b" font-size="11">Windows System.Speech (offline WAV) | Honest Browser Fallback</text>
+
+  <!-- Vertical Connectors Tier 2 -> Tier 3 -->
+  <line x1="210" y1="404" x2="210" y2="438" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="550" y1="404" x2="550" y2="438" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="890" y1="404" x2="890" y2="438" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1235" y1="404" x2="1235" y2="438" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- TIER 3: Autonomous Orchestrator & Cognitive Engines -->
+  <rect x="24" y="438" width="1392" height="222" rx="10" fill="#fefce8" stroke="#fde047" stroke-width="1.5" />
+  <text x="40" y="459" fill="#854d0e" font-size="12" font-weight="700" letter-spacing="0.6">TIER 3 · AUTONOMOUS AGENT ORCHESTRATION, TOOL REGISTRY &amp; COGNITIVE ENGINES</text>
+
+  <rect x="40" y="472" width="320" height="172" rx="8" fill="#ffffff" stroke="#fcd34d" filter="url(#shadow)" />
+  <text x="54" y="494" fill="#0f172a" font-size="13.5" font-weight="700">Agent Orchestrator (app/agent.py)</text>
+  <text x="54" y="514" fill="#475569" font-size="11.5">• Gemini Function-Calling Tool Loop</text>
+  <text x="54" y="532" fill="#475569" font-size="11.5">• Bounded Iterations (max_tool_iterations=5)</text>
+  <text x="54" y="550" fill="#475569" font-size="11.5">• Zero Hardcoded Commercial Claims</text>
+  <text x="54" y="568" fill="#475569" font-size="11.5">• Sentence Streaming + Cancel Guard</text>
+  <text x="54" y="586" fill="#475569" font-size="11.5">• Prompt-Injection &amp; Intent Guardrails</text>
+  <text x="54" y="604" fill="#64748b" font-size="11">• Real-Timestamp CallSummary Builder</text>
+  <text x="54" y="622" fill="#64748b" font-size="11">• Stage Latency Breakdown Telemetry</text>
+
+  <rect x="384" y="472" width="326" height="172" rx="8" fill="#ffffff" stroke="#fcd34d" filter="url(#shadow)" />
+  <text x="398" y="494" fill="#0f172a" font-size="13.5" font-weight="700">Validated Tool Registry (app/tools.py)</text>
+  <text x="398" y="514" fill="#475569" font-size="11.5">11 Allowlisted Pydantic-Validated Tools:</text>
+  <text x="398" y="532" fill="#475569" font-size="11">• retrieve_customer_memory · get_customer_history</text>
+  <text x="398" y="550" fill="#475569" font-size="11">• retrieve_knowledge · qualify_lead · analyze_sentiment</text>
+  <text x="398" y="568" fill="#475569" font-size="11">• check_appointment_availability · book_appointment</text>
+  <text x="398" y="586" fill="#475569" font-size="11">• reschedule_appointment · cancel_appointment</text>
+  <text x="398" y="604" fill="#475569" font-size="11">• sync_crm · generate_followup</text>
+  <text x="398" y="622" fill="#64748b" font-size="11">• Per-Tool Timeouts + tool_execution_logs Audit</text>
+
+  <rect x="734" y="472" width="326" height="172" rx="8" fill="#ffffff" stroke="#fcd34d" filter="url(#shadow)" />
+  <text x="748" y="494" fill="#0f172a" font-size="13.5" font-weight="700">Multilingual NLP &amp; BANT (app/nlp.py)</text>
+  <text x="748" y="514" fill="#475569" font-size="11.5">• 6 Languages: EN, HI, Hinglish, ES, FR, DE</text>
+  <text x="748" y="532" fill="#475569" font-size="11.5">• 12-Class Contextual Intent Classifier</text>
+  <text x="748" y="550" fill="#475569" font-size="11.5">• Negation, Sarcasm &amp; Mixed Sentiment</text>
+  <text x="748" y="568" fill="#475569" font-size="11.5">• Separate Emotional Polarity vs Intent Score</text>
+  <text x="748" y="586" fill="#475569" font-size="11.5">• Calibrated BANT (25x4) + Evidence &amp; Correction</text>
+  <text x="748" y="604" fill="#64748b" font-size="11">• DST-Safe IANA ZoneInfo &amp; Natural TZ Parser</text>
+  <text x="748" y="622" fill="#64748b" font-size="11">• Ambiguous Timezone Confirmation Gate</text>
+
+  <rect x="1084" y="472" width="316" height="172" rx="8" fill="#ffffff" stroke="#fcd34d" filter="url(#shadow)" />
+  <text x="1098" y="494" fill="#0f172a" font-size="13.5" font-weight="700">Hybrid RAG Engine (app/rag.py)</text>
+  <text x="1098" y="514" fill="#475569" font-size="11.5">• .pdf, .docx, .txt, .md Paragraph Chunker</text>
+  <text x="1098" y="532" fill="#475569" font-size="11.5">• Sparse Word TF-IDF + Cross-Lingual Map</text>
+  <text x="1098" y="550" fill="#475569" font-size="11.5">• SentenceTransformer / Gemini / LSA Dense</text>
+  <text x="1098" y="568" fill="#475569" font-size="11.5">• Persistent Disk Embedding Cache</text>
+  <text x="1098" y="586" fill="#475569" font-size="11.5">• RRF + Cross-Encoder Reranking</text>
+  <text x="1098" y="604" fill="#64748b" font-size="11">• Contradiction Detection Across Sources</text>
+  <text x="1098" y="622" fill="#64748b" font-size="11">• Unknown-Answer Refusal Threshold</text>
+
+  <!-- Horizontal Connectors within Tier 3 -->
+  <line x1="360" y1="558" x2="384" y2="558" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="710" y1="558" x2="734" y2="558" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1060" y1="558" x2="1084" y2="558" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- Vertical Connectors Tier 3 -> Tier 4 -->
+  <line x1="255" y1="660" x2="255" y2="694" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="720" y1="660" x2="720" y2="694" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1180" y1="660" x2="1180" y2="694" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- TIER 4: Memory, Atomic Booking & CRM Adapters -->
+  <rect x="24" y="694" width="1392" height="162" rx="10" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5" />
+  <text x="40" y="715" fill="#6b21a8" font-size="12" font-weight="700" letter-spacing="0.6">TIER 4 · 3-TIER MEMORY, ATOMIC BOOKING ENGINE &amp; IDEMPOTENT CRM ADAPTERS</text>
+
+  <rect x="40" y="728" width="430" height="114" rx="8" fill="#ffffff" stroke="#d8b4fe" filter="url(#shadow)" />
+  <text x="56" y="750" fill="#0f172a" font-size="13.5" font-weight="700">3-Tier Memory &amp; Real Call Metrics (database.py)</text>
+  <text x="56" y="770" fill="#475569" font-size="11.5">• Short-Term: Recent turns (messages)</text>
+  <text x="56" y="788" fill="#475569" font-size="11.5">• Session Facts: Active BANT, TZ, proposed slots</text>
+  <text x="56" y="806" fill="#475569" font-size="11.5">• Long-Term: Cross-call lookup (email / phone / company)</text>
+  <text x="56" y="824" fill="#64748b" font-size="11">• Real Lifecycle Timestamps (start, connect, end, barge-in)</text>
+
+  <rect x="494" y="728" width="440" height="114" rx="8" fill="#ffffff" stroke="#d8b4fe" filter="url(#shadow)" />
+  <text x="510" y="750" fill="#0f172a" font-size="13.5" font-weight="700">Atomic Appointment Engine (database.py)</text>
+  <text x="510" y="770" fill="#475569" font-size="11.5">• Business-Timezone Hours &amp; Past-Date Guard (422)</text>
+  <text x="510" y="788" fill="#475569" font-size="11.5">• SQLite BEGIN IMMEDIATE Concurrency Lock (409)</text>
+  <text x="510" y="806" fill="#475569" font-size="11.5">• UTC Storage + Local-Time Slot Display</text>
+  <text x="510" y="824" fill="#64748b" font-size="11">• Atomic Book (POST), Reschedule (PATCH), Cancel (DELETE)</text>
+
+  <rect x="958" y="728" width="442" height="114" rx="8" fill="#ffffff" stroke="#d8b4fe" filter="url(#shadow)" />
+  <text x="974" y="750" fill="#0f172a" font-size="13.5" font-weight="700">CRM Upsert, Idempotency &amp; DLQ Layer (app/crm.py)</text>
+  <text x="974" y="770" fill="#475569" font-size="11.5">• HubSpot Search+Create/Update | Salesforce SOQL Upsert</text>
+  <text x="974" y="788" fill="#475569" font-size="11.5">• Webhook (HMAC-SHA256) | Explicit Mock Adapter</text>
+  <text x="974" y="806" fill="#475569" font-size="11.5">• Deterministic SHA-256 Idempotency Keys (No Duplicates)</text>
+  <text x="974" y="824" fill="#64748b" font-size="11">• Transient Backoff Retries + Dead-Letter Queue (/api/crm/retry)</text>
+
+  <!-- Vertical Connectors Tier 4 -> Tier 5 -->
+  <line x1="485" y1="856" x2="485" y2="890" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+  <line x1="1180" y1="856" x2="1180" y2="890" stroke="#475569" stroke-width="2" marker-end="url(#arrow)" />
+
+  <!-- TIER 5: Storage, Migrations & External Services -->
+  <rect x="24" y="890" width="1392" height="148" rx="10" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5" />
+  <text x="40" y="911" fill="#334155" font-size="12" font-weight="700" letter-spacing="0.6">TIER 5 · PERSISTENT STORAGE, MIGRATIONS &amp; EXTERNAL PROVIDERS</text>
+
+  <rect x="40" y="924" width="894" height="100" rx="8" fill="#ffffff" stroke="#94a3b8" filter="url(#shadow)" />
+  <text x="56" y="946" fill="#0f172a" font-size="13.5" font-weight="700">SQLite WAL / Optional PostgreSQL + Alembic Migrations (data/fortivex.db, alembic/)</text>
+  <text x="56" y="966" fill="#475569" font-size="11.5">Tables: leads (external_crm_ids_json) · sessions (metrics_json) · messages · appointments · score_history</text>
+  <text x="56" y="984" fill="#475569" font-size="11.5">Audit &amp; Ops: call_summaries · tool_execution_logs · crm_sync_logs · crm_sync_jobs (DLQ) · custom_docs</text>
+  <text x="56" y="1002" fill="#64748b" font-size="11">Filtered BI Analytics (/api/insights) · CSV Export · Atomic Backup (/api/admin/backup) · Retention Cleanup</text>
+
+  <rect x="958" y="924" width="442" height="100" rx="8" fill="#ffffff" stroke="#94a3b8" filter="url(#shadow)" />
+  <text x="974" y="946" fill="#0f172a" font-size="13.5" font-weight="700">External Cloud Services (Optional .env Credentials)</text>
+  <text x="974" y="966" fill="#475569" font-size="11.5">• LLM &amp; Embeddings: Google Gemini (gemini-2.5-flash)</text>
+  <text x="974" y="984" fill="#475569" font-size="11.5">• Cloud Voice: Deepgram, OpenAI Whisper, ElevenLabs, Google TTS</text>
+  <text x="974" y="1002" fill="#64748b" font-size="11">• External CRMs: HubSpot v3, Salesforce v59.0, Signed Webhooks</text>
+</svg>

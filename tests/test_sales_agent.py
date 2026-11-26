@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from fastapi.testclient import TestClient
 
@@ -9,6 +10,7 @@ from app.main import create_app
 
 
 def _make_client(tmp_path: Path) -> TestClient:
+    os.environ["GEMINI_API_KEY"] = ""
     app = create_app(db_path=tmp_path / "test_fortivex.db")
     return TestClient(app)
 
@@ -47,7 +49,9 @@ def test_multilingual_rag_and_bant_progression(tmp_path: Path) -> None:
     assert d1["memory"]["team_size"] == 60
     assert d1["qualification"]["score"] >= 70
     assert d1["qualification"]["tier"] == "Hot"
-    assert d1["crm_synced"] is True
+    assert d1["local_persistence_status"] == "saved"
+    assert d1["external_crm_status"] == "not_configured"
+    assert d1["crm_synced"] is False
 
     # Turn 2: Objection + competitor comparison -> RAG battlecard retrieval
     r2 = client.post(

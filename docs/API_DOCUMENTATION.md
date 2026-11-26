@@ -113,15 +113,21 @@ Cancels an appointment.
 ### `GET /api/leads` & `GET /api/leads/export`
 Lists CRM leads (including score history) and exports CSV.
 
-### `GET /api/crm/status` & `GET /api/webhooks`
-Reports active CRM adapters (`local-sqlite`, `webhook`, `hubspot`, `salesforce`, `mock`) and delivery/retry audit logs.
+### `GET /api/crm/status`, `GET /api/crm/failed-jobs`, `POST /api/crm/retry/{job_id}` & `GET /api/webhooks`
+Reports active CRM adapters (`local-sqlite`, `webhook`, `hubspot`, `salesforce`, `mock`), delivery audit logs, dead-letter failed jobs, and idempotent job replay.
 
 ---
 
-## Business Intelligence & Reliability
+## Voice, RAG Diagnostics, Auth & Reliability
+
+### `GET /api/voice/status` & `GET /api/rag/diagnostics`
+Exposes active STT/TTS provider names/voices and RAG embedding/reranker backend diagnostics without exposing credentials.
+
+### `GET /api/auth/status`, `POST /api/auth/session`, `DELETE /api/auth/session`
+Manages HttpOnly session cookie authentication when `FORTIVEX_API_TOKEN` is configured.
 
 ### `GET /api/insights?date_from=&date_to=&tier=&outcome=`
-Computes real-time analytics from SQLite records (calls, unique leads, qualified leads, conversion rate, pipeline value, sentiment trends, top objections, FAQs, and agent performance).
+Computes real-time analytics from SQLite records (calls, unique leads, qualified leads, conversion rate, real average call duration, pipeline value, sentiment trends, top objections, FAQs, and agent performance).
 
-### `POST /api/admin/backup`
-Creates a timestamped SQLite backup snapshot in `data/backups/`.
+### `POST /api/admin/backup` & `POST /api/admin/retention-cleanup`
+Creates a timestamped SQLite backup snapshot in `data/backups/` and enforces configurable data retention / temp audio cleanup.

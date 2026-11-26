@@ -23,13 +23,14 @@ from app.models import (
     LeadQualification,
     LeadRecord,
     SentimentResult,
+    SessionMetrics,
     SupportedLang,
     ThreeTierMemorySnapshot,
     ToolExecutionLog,
     utc_now,
     utc_now_iso,
 )
-from app.nlp import validate_business_slot
+from app.nlp import resolve_zoneinfo, validate_business_slot
 
 
 class BookingConflictError(Exception):
@@ -170,8 +171,27 @@ class DatabaseStore:
                     status TEXT NOT NULL,
                     http_status INTEGER,
                     attempts INTEGER DEFAULT 1,
+                    external_record_id TEXT,
+                    error_code TEXT,
                     detail TEXT,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS crm_sync_jobs (
+                    id TEXT PRIMARY KEY,
+                    adapter TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    retry_count INTEGER DEFAULT 0,
+                    http_status INTEGER,
+                    external_record_id TEXT,
+                    error_code TEXT,
+                    failure_reason TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS call_summaries (
@@ -193,14 +213,32 @@ class DatabaseStore:
     def _run_migrations(self) -> None:
         """Preserve existing DB records while upgrading legacy schemas safely."""
         with self._connect() as conn:
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(leads)").fetchall()}
-            if "phone" not in cols:
+            lead_cols = {r["name"] for r in conn.execute("PRAGMA table_info(leads)").fetchall()}
+            if "phone" not in lead_cols:
                 conn.execute("ALTER TABLE leads ADD COLUMN phone TEXT")
+            if "external_crm_ids_json" not in lead_cols:
+                conn.execute("ALTER TABLE leads ADD COLUMN external_crm_ids_json TEXT DEFAULT '{}'")
+
+            sess_cols = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            if "metrics_json" not in sess_cols:
+                conn.execute("ALTER TABLE sessions ADD COLUMN metrics_json TEXT")
+
+            sync_cols = {r["name"] for r in conn.execute("PRAGMA table_info(crm_sync_logs)").fetchall()}
+            if "external_record_id" not in sync_cols:
+                conn.execute("ALTER TABLE crm_sync_logs ADD COLUMN external_record_id TEXT")
+            if "error_code" not in sync_cols:
+                conn.execute("ALTER TABLE crm_sync_logs ADD COLUMN error_code TEXT")
+
             applied = {r["version"] for r in conn.execute("SELECT version FROM schema_migrations").fetchall()}
             if 1 not in applied:
                 conn.execute(
                     "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                     (1, utc_now_iso()),
+                )
+            if 2 not in applied:
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                    (2, utc_now_iso()),
                 )
             conn.commit()
 
@@ -317,6 +355,12 @@ class DatabaseStore:
         with self._connect() as conn:
             row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
             if row:
+                metrics_raw = row["metrics_json"] if "metrics_json" in row.keys() else None
+                metrics = (
+                    SessionMetrics.model_validate_json(metrics_raw)
+                    if metrics_raw
+                    else SessionMetrics(call_started_at=row["created_at"], call_connected_at=row["created_at"])
+                )
                 return {
                     "session_id": row["session_id"],
                     "lead_id": row["lead_id"],
@@ -325,6 +369,7 @@ class DatabaseStore:
                     "qualification": LeadQualification.model_validate_json(row["qualification_json"]),
                     "awaiting_slot_choice": bool(row["awaiting_slot_choice"]),
                     "proposed_slots": json.loads(row["proposed_slots_json"]),
+                    "metrics": metrics,
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
@@ -332,13 +377,17 @@ class DatabaseStore:
             now = utc_now_iso()
             mem = LeadMemory(preferred_language=language)
             qual = LeadQualification()
+            metrics = SessionMetrics(call_started_at=now, call_connected_at=now)
             conn.execute(
                 """
                 INSERT INTO sessions (session_id, lead_id, language, memory_json, qualification_json,
-                                      awaiting_slot_choice, proposed_slots_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      awaiting_slot_choice, proposed_slots_json, metrics_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, None, language, mem.model_dump_json(), qual.model_dump_json(), 0, "[]", now, now),
+                (
+                    session_id, None, language, mem.model_dump_json(), qual.model_dump_json(),
+                    0, "[]", metrics.model_dump_json(), now, now,
+                ),
             )
             conn.commit()
             return {
@@ -349,6 +398,7 @@ class DatabaseStore:
                 "qualification": qual,
                 "awaiting_slot_choice": False,
                 "proposed_slots": [],
+                "metrics": metrics,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -396,28 +446,115 @@ class DatabaseStore:
         qualification: LeadQualification,
         awaiting_slot_choice: bool,
         proposed_slots: list[str],
+        metrics: Optional[SessionMetrics] = None,
     ) -> None:
         now = utc_now_iso()
         with self._connect() as conn:
+            if metrics is not None:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET lead_id = ?, language = ?, memory_json = ?, qualification_json = ?,
+                        awaiting_slot_choice = ?, proposed_slots_json = ?, metrics_json = ?, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (
+                        lead_id,
+                        language,
+                        memory.model_dump_json(),
+                        qualification.model_dump_json(),
+                        1 if awaiting_slot_choice else 0,
+                        json.dumps(proposed_slots),
+                        metrics.model_dump_json(),
+                        now,
+                        session_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET lead_id = ?, language = ?, memory_json = ?, qualification_json = ?,
+                        awaiting_slot_choice = ?, proposed_slots_json = ?, updated_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (
+                        lead_id,
+                        language,
+                        memory.model_dump_json(),
+                        qualification.model_dump_json(),
+                        1 if awaiting_slot_choice else 0,
+                        json.dumps(proposed_slots),
+                        now,
+                        session_id,
+                    ),
+                )
+            conn.commit()
+
+    def get_session_metrics(self, session_id: str) -> SessionMetrics:
+        sess = self.get_or_create_session(session_id)
+        return sess["metrics"]
+
+    def record_session_event(
+        self,
+        session_id: str,
+        *,
+        connected: bool = False,
+        ended: bool = False,
+        interruption: bool = False,
+        user_turn: bool = False,
+        agent_turn: bool = False,
+        response_latency_ms: int = 0,
+        stt_ms: int = 0,
+        tts_ms: int = 0,
+        speaking_seconds: float = 0.0,
+    ) -> SessionMetrics:
+        """Update real event-driven call metrics from live call timestamps and events."""
+        sess = self.get_or_create_session(session_id)
+        m: SessionMetrics = sess["metrics"]
+        now_dt = utc_now()
+        now_iso = now_dt.isoformat()
+
+        if not m.call_started_at:
+            m.call_started_at = sess["created_at"]
+        if connected and not m.call_connected_at:
+            m.call_connected_at = now_iso
+        if interruption:
+            m.interruption_count += 1
+        if user_turn:
+            m.user_turn_count += 1
+        if agent_turn:
+            prev_n = m.agent_turn_count
+            m.agent_turn_count += 1
+            if response_latency_ms > 0:
+                m.average_response_latency_ms = round(
+                    ((m.average_response_latency_ms * prev_n) + response_latency_ms) / m.agent_turn_count, 1
+                )
+        if stt_ms > 0:
+            m.stt_processing_ms += stt_ms
+        if tts_ms > 0:
+            m.tts_processing_ms += tts_ms
+        if speaking_seconds > 0:
+            m.speaking_duration_seconds = round(m.speaking_duration_seconds + speaking_seconds, 2)
+        if ended:
+            m.call_ended_at = now_iso
+
+        try:
+            start_dt = datetime.fromisoformat(m.call_started_at.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat((m.call_ended_at or now_iso).replace("Z", "+00:00"))
+            elapsed = max(0.0, (end_dt - start_dt).total_seconds())
+        except Exception:
+            elapsed = 0.0
+        m.actual_duration_seconds = round(elapsed, 2)
+        m.silence_duration_seconds = round(max(0.0, elapsed - m.speaking_duration_seconds), 2)
+
+        with self._connect() as conn:
             conn.execute(
-                """
-                UPDATE sessions
-                SET lead_id = ?, language = ?, memory_json = ?, qualification_json = ?,
-                    awaiting_slot_choice = ?, proposed_slots_json = ?, updated_at = ?
-                WHERE session_id = ?
-                """,
-                (
-                    lead_id,
-                    language,
-                    memory.model_dump_json(),
-                    qualification.model_dump_json(),
-                    1 if awaiting_slot_choice else 0,
-                    json.dumps(proposed_slots),
-                    now,
-                    session_id,
-                ),
+                "UPDATE sessions SET metrics_json = ?, updated_at = ? WHERE session_id = ?",
+                (m.model_dump_json(), now_iso, session_id),
             )
             conn.commit()
+        return m
 
     def add_message(self, msg: ConversationMessage) -> None:
         with self._connect() as conn:
@@ -671,11 +808,13 @@ class DatabaseStore:
             ]
 
     def _row_to_lead(self, row: sqlite3.Row) -> LeadRecord:
+        keys = row.keys()
+        ext_ids_raw = row["external_crm_ids_json"] if "external_crm_ids_json" in keys and row["external_crm_ids_json"] else "{}"
         return LeadRecord(
             id=row["id"],
             name=row["name"],
             email=row["email"],
-            phone=row["phone"] if "phone" in row.keys() else None,
+            phone=row["phone"] if "phone" in keys else None,
             company=row["company"],
             role=row["role"],
             preferred_language=row["preferred_language"],
@@ -687,9 +826,24 @@ class DatabaseStore:
             pain_points=json.loads(row["pain_points_json"]),
             objections=json.loads(row["objections_json"]),
             last_sentiment=row["last_sentiment"],
+            external_crm_ids=json.loads(ext_ids_raw),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
+
+    def set_lead_external_id(self, lead_id: str, provider: str, external_id: str) -> None:
+        """Persist external CRM record ID (e.g., HubSpot contact ID or Salesforce Lead ID) for upserts."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT external_crm_ids_json FROM leads WHERE id = ?", (lead_id,)).fetchone()
+            if not row:
+                return
+            current = json.loads(row["external_crm_ids_json"] or "{}")
+            current[provider] = external_id
+            conn.execute(
+                "UPDATE leads SET external_crm_ids_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(current), utc_now_iso(), lead_id),
+            )
+            conn.commit()
 
     def get_lead(self, lead_id: str) -> Optional[LeadRecord]:
         with self._connect() as conn:
@@ -703,7 +857,9 @@ class DatabaseStore:
 
     # ---------------- Atomic Appointment Booking, Rescheduling & Cancellation ----------------
 
-    def get_available_slots(self, count: int = 4, target_date: Optional[str] = None) -> list[str]:
+    def get_available_slots(
+        self, count: int = 4, target_date: Optional[str] = None, tz_name: str = "UTC"
+    ) -> list[str]:
         with self._connect() as conn:
             booked = {
                 r["slot_iso"]
@@ -712,26 +868,35 @@ class DatabaseStore:
                 ).fetchall()
             }
 
-        now = utc_now()
+        now_utc = utc_now()
+        biz_tz = resolve_zoneinfo(settings.business_timezone)
+        now_biz = now_utc.astimezone(biz_tz)
         candidates: list[str] = []
         start_day = 1
         if target_date:
             try:
                 parsed = datetime.fromisoformat(target_date).date()
-                delta = (parsed - now.date()).days
+                delta = (parsed - now_biz.date()).days
                 start_day = max(0, delta)
             except Exception:
                 pass
 
+        hours = [
+            h
+            for h in (10, 14, 16)
+            if settings.business_hours_start <= h < settings.business_hours_end
+        ] or [settings.business_hours_start]
+
         day_offset = start_day
         while len(candidates) < count and day_offset <= start_day + 14:
-            day = now + timedelta(days=day_offset)
-            if day.weekday() < 5:
-                for hr in (10, 14, 16):
-                    slot_dt = day.replace(hour=hr, minute=0, second=0, microsecond=0)
-                    if slot_dt <= now + timedelta(minutes=15):
+            day_biz = now_biz + timedelta(days=day_offset)
+            if day_biz.weekday() < 5:
+                for hr in hours:
+                    slot_biz = day_biz.replace(hour=hr, minute=0, second=0, microsecond=0)
+                    slot_utc = slot_biz.astimezone(timezone.utc)
+                    if slot_utc <= now_utc + timedelta(minutes=15):
                         continue
-                    slot_iso = slot_dt.isoformat().replace("+00:00", "Z")
+                    slot_iso = slot_utc.isoformat().replace("+00:00", "Z")
                     if slot_iso not in booked:
                         candidates.append(slot_iso)
                         if len(candidates) >= count:
@@ -891,12 +1056,15 @@ class DatabaseStore:
         http_status: Optional[int],
         attempts: int,
         detail: str,
+        external_record_id: Optional[str] = None,
+        error_code: Optional[str] = None,
     ) -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO crm_sync_logs (id, adapter, operation, idempotency_key, status, http_status, attempts, detail, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO crm_sync_logs (id, adapter, operation, idempotency_key, status, http_status,
+                                           attempts, external_record_id, error_code, detail, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     f"sync-{uuid.uuid4().hex[:8]}",
@@ -906,11 +1074,82 @@ class DatabaseStore:
                     status,
                     http_status,
                     attempts,
+                    external_record_id,
+                    error_code,
                     detail,
                     utc_now_iso(),
                 ),
             )
             conn.commit()
+
+    def get_successful_crm_sync(self, idempotency_key: str) -> Optional[dict[str, Any]]:
+        """Check if an idempotent CRM sync operation already succeeded."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM crm_sync_logs WHERE idempotency_key = ? AND status = 'success' ORDER BY created_at DESC LIMIT 1",
+                (idempotency_key,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def upsert_crm_sync_job(
+        self,
+        adapter: str,
+        operation: str,
+        entity_id: str,
+        idempotency_key: str,
+        payload: dict[str, Any],
+        status: str,
+        retry_count: int,
+        http_status: Optional[int],
+        external_record_id: Optional[str],
+        error_code: Optional[str],
+        failure_reason: Optional[str],
+    ) -> str:
+        """Persist CRM synchronization job state (pending / synced / failed dead-letter) safely."""
+        now = utc_now_iso()
+        job_id = f"job-{uuid.uuid4().hex[:8]}"
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO crm_sync_jobs (id, adapter, operation, entity_id, idempotency_key, payload_json,
+                                           status, retry_count, http_status, external_record_id,
+                                           error_code, failure_reason, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(idempotency_key) DO UPDATE SET
+                    status = excluded.status,
+                    retry_count = excluded.retry_count,
+                    http_status = excluded.http_status,
+                    external_record_id = COALESCE(excluded.external_record_id, crm_sync_jobs.external_record_id),
+                    error_code = excluded.error_code,
+                    failure_reason = excluded.failure_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_id, adapter, operation, entity_id, idempotency_key, json.dumps(payload),
+                    status, retry_count, http_status, external_record_id, error_code, failure_reason, now, now,
+                ),
+            )
+            conn.commit()
+            row = conn.execute("SELECT id FROM crm_sync_jobs WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
+            return row["id"] if row else job_id
+
+    def list_crm_sync_jobs(self, status: Optional[str] = None, limit: int = 30) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            if status:
+                rows = conn.execute(
+                    "SELECT * FROM crm_sync_jobs WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
+                    (status, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM crm_sync_jobs ORDER BY updated_at DESC LIMIT ?", (limit,)
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_crm_sync_job(self, job_id: str) -> Optional[dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM crm_sync_jobs WHERE id = ?", (job_id,)).fetchone()
+            return dict(row) if row else None
 
     def list_crm_sync_logs(self, limit: int = 30) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -1063,6 +1302,17 @@ class DatabaseStore:
                     faq_counts[title] += 1
 
         avg_turns = round(sum(s.turn_count for s in sum_rows) / len(sum_rows), 1) if sum_rows else 0.0
+        durations = [
+            s.actual_duration_seconds if s.actual_duration_seconds > 0 else float(s.duration_estimate_sec)
+            for s in sum_rows
+        ]
+        avg_dur = round(sum(durations) / len(durations), 1) if durations else 0.0
+        avg_lat = (
+            round(sum(s.average_response_latency_ms for s in sum_rows) / len(sum_rows), 1)
+            if sum_rows
+            else 0.0
+        )
+        total_interruptions = sum(s.interruption_count for s in sum_rows)
         return BusinessInsights(
             total_calls=total_calls,
             unique_leads=len(unique_keys),
@@ -1077,6 +1327,7 @@ class DatabaseStore:
             booking_rate_pct=booking_rate,
             average_lead_score=avg_score,
             average_sentiment=avg_sent,
+            average_call_duration_sec=avg_dur,
             total_pipeline_usd=pipeline,
             language_distribution=dict(lang_counts),
             top_pain_points=[{"label": k, "count": v} for k, v in pain_counts.most_common(5)],
@@ -1085,10 +1336,28 @@ class DatabaseStore:
             stage_funnel=dict(stage_counts),
             agent_performance={
                 "avg_turns_per_call": avg_turns,
+                "avg_call_duration_sec": avg_dur,
+                "avg_response_latency_ms": avg_lat,
+                "total_interruptions": total_interruptions,
                 "qualification_rate_pct": round((qualified / total_leads) * 100, 1) if total_leads else 0.0,
                 "summaries_generated": len(sum_rows),
             },
         )
+
+    def cleanup_old_records(self, retention_days: Optional[int] = None) -> dict[str, int]:
+        """Enforce configurable data retention policy by purging expired sessions & logs."""
+        days = retention_days if retention_days is not None else settings.data_retention_days
+        cutoff = (utc_now() - timedelta(days=days)).isoformat()
+        with self._connect() as conn:
+            m_cur = conn.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
+            t_cur = conn.execute("DELETE FROM tool_execution_logs WHERE executed_at < ?", (cutoff,))
+            w_cur = conn.execute("DELETE FROM webhook_events WHERE created_at < ?", (cutoff,))
+            conn.commit()
+            return {
+                "deleted_messages": m_cur.rowcount,
+                "deleted_tool_logs": t_cur.rowcount,
+                "deleted_webhooks": w_cur.rowcount,
+            }
 
     def create_backup(self) -> Path:
         """Create an atomic online SQLite backup snapshot."""
